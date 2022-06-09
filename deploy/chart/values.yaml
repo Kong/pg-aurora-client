@@ -1,0 +1,27 @@
+image:
+  repository: "kongcloud/pg-aurora-client"
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+autoscaling:
+  enabled: false
+replicaCount: 1
+
+database:
+  hosts:
+    rw: "koko.cluster-cgbbshtmqayd.us-west-2.rds.amazonaws.com"
+  port: 5432
+  username: postgres
+  db_name: koko
+  tlsEnabled: "no"
+
+
+
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 200m
+    memory: 512Mi
