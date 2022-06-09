@@ -14,9 +14,10 @@ database:
   username: postgres
   db_name: koko
   tlsEnabled: "no"
+  secret_name: pg-aurora-client-secret
 
-
-
+nameOverride: ""
+fullnameOverride: ""
 
 resources:
   limits:

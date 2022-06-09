@@ -44,19 +44,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-pg-aurora-client monolith labels
+pg-aurora-client canary labels
 */}}
 {{- define "pg-aurora-client.labels" -}}
 {{ include "pg-aurora-client.base.labels" . }}
-app.kubernetes.io/component: monolith
+app.kubernetes.io/component: canary
 {{- end }}
 
 {{/*
-pg-aurora-client monolith selector labels
+pg-aurora-client canary selector labels
 */}}
 {{- define "pg-aurora-client.selectorLabels" -}}
 {{ include "pg-aurora-client.base.selectorLabels" . }}
-app.kubernetes.io/component: monolith
+app.kubernetes.io/component: canary
 {{- end }}
 
 {{/*
@@ -87,4 +87,10 @@ Create database connection env vars
 {{ end }}
 - name: "PG_PORT"
   value: {{ .Values.database.port }}
+- name: "PG_PASSWORD"
+  valueFrom:
+    secretKeyRef:
+      key: password
+      name: {{ .Values.database.secret_name }}
+
 {{- end }}
