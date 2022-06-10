@@ -41,13 +41,13 @@ func main() {
 	} else {
 		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
 	}
-	db, err := openDB(dsn)
-	if err != nil {
-		log.Fatal(err)
-	}
 	logger, err := SetupLogging("debug")
 	if err != nil {
 		log.Fatal(err)
+	}
+	db, err := openDB(dsn)
+	if err != nil {
+		logger.Fatal("DB Connection failed", zap.Error(err))
 	}
 	defer db.Close()
 	ac := &appContext{
@@ -55,7 +55,7 @@ func main() {
 		Logger: logger,
 	}
 	ac.Logger.Info("Application is running on : 8080 .....")
-	http.ListenAndServe("127.0.0.1:8080", ac.routes())
+	http.ListenAndServe("0.0.0.0:8080", ac.routes())
 }
 
 func openDB(dsn string) (*sql.DB, error) {

@@ -8,7 +8,15 @@ import (
 func (ac *appContext) routes() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/pghealth", ac.getPGHealthHandler).Methods("GET")
+	r.HandleFunc("/health", ac.getHealthHandler).Methods("GET")
 	return r
+}
+
+func (ac *appContext) getHealthHandler(w http.ResponseWriter, r *http.Request) {
+	err := ac.writeJSON(w, http.StatusOK, envelope{"status": "ok"}, nil)
+	if err != nil {
+		ac.logError(r, err)
+	}
 }
 
 func (ac *appContext) getPGHealthHandler(w http.ResponseWriter, r *http.Request) {
