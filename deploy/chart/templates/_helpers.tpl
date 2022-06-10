@@ -72,13 +72,6 @@ Create database connection env vars
 {{- define "pg-aurora-client.dbEnv" -}}
 - name: "PG_DATABASE"
   value: {{ .Values.database.db_name }}
-- name: "PG_PASSWORD"
-  valueFrom:
-    secretKeyRef:
-      key: POSTGRES_PASSWORD
-      name: {{ include "pg-aurora-client.fullname" . }}-database
-- name: "PG_USER"
-  value: {{ .Values.database.username }}
 - name: "PG_HOST"
   value: {{ .Values.database.hosts.rw }}
 {{- if .Values.database.hosts.ro }}
@@ -86,11 +79,12 @@ Create database connection env vars
   value: {{ .Values.database.hosts.ro -}}
 {{ end }}
 - name: "PG_PORT"
-  value: {{ .Values.database.port }}
+  value: {{ quote .Values.database.port }}
+- name: "PG_USER"
+  value: {{ .Values.database.username }}
 - name: "PG_PASSWORD"
   valueFrom:
     secretKeyRef:
       key: password
       name: {{ .Values.database.secret_name }}
-
 {{- end }}
