@@ -1,0 +1,13 @@
+aws:
+  enabled: true
+
+database:
+  tls:
+    enabled : false
+  hosts:
+    rw: "rw.kadmin.aurora.internal.kongcloud.io"
+    ro: "ro.kadmin.aurora.internal.kongcloud.io"
+  port: 5432
+  username: failover-test
+  db_name: failover-test
+  secret_name: pg-aurora-client-secret

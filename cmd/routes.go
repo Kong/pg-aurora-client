@@ -12,14 +12,14 @@ func (ac *appContext) routes() http.Handler {
 	return r
 }
 
-func (ac *appContext) getHealthHandler(w http.ResponseWriter, r *http.Request) {
+func (ac *appContext) getHealthHandler(w http.ResponseWriter, _ *http.Request) {
 	err := ac.writeJSON(w, http.StatusOK, envelope{"status": "ok"}, nil)
 	if err != nil {
 		ac.logError(err)
 	}
 }
 
-func (ac *appContext) getPGHealthHandler(w http.ResponseWriter, r *http.Request) {
+func (ac *appContext) getPGHealthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UFT-8")
 	// your logic here to call
 	status, err := ac.Store.GetReplicaStatus()
