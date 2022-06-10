@@ -15,7 +15,7 @@ func (ac *appContext) routes() http.Handler {
 func (ac *appContext) getHealthHandler(w http.ResponseWriter, r *http.Request) {
 	err := ac.writeJSON(w, http.StatusOK, envelope{"status": "ok"}, nil)
 	if err != nil {
-		ac.logError(r, err)
+		ac.logError(err)
 	}
 }
 
@@ -24,12 +24,14 @@ func (ac *appContext) getPGHealthHandler(w http.ResponseWriter, r *http.Request)
 	// your logic here to call
 	status, err := ac.Store.GetReplicaStatus()
 	if err != nil {
-		ac.logError(r, err)
-		ac.errorResponse(w, r, http.StatusInternalServerError, "Failed to Query PG")
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
 		return
 	}
-	err = ac.writeJSON(w, http.StatusOK, envelope{"replicaStatusList": status}, nil)
+	payload := envelope{"replicaStatusList": status}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
-		ac.logError(r, err)
+		ac.logError(err)
 	}
+	ac.logJson(payload)
 }

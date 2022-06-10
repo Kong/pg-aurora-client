@@ -26,15 +26,25 @@ func (ac *appContext) writeJSON(w http.ResponseWriter, status int, data envelope
 	return nil
 }
 
-func (ac *appContext) errorResponse(w http.ResponseWriter, r *http.Request, status int, message interface{}) {
+func (ac *appContext) errorResponse(w http.ResponseWriter, status int, message interface{}) {
 	env := envelope{"error": message}
 	err := ac.writeJSON(w, status, env, nil)
 	if err != nil {
-		ac.logError(r, err)
+		ac.logError(err)
 		w.WriteHeader(500)
 	}
 }
 
-func (ac *appContext) logError(r *http.Request, err error) {
+func (ac *appContext) logError(err error) {
 	ac.Logger.Sugar().Errorf("%s\n%s", err.Error(), debug.Stack())
+}
+
+func (ac *appContext) logJson(message interface{}) {
+	env := envelope{"payload": message}
+	js, err := json.Marshal(env)
+	if err != nil {
+		ac.logError(err)
+		return
+	}
+	ac.Logger.Info(string(js))
 }
