@@ -1,6 +1,6 @@
 ### Development Checklist
 - [ ] For Koko OSS , followed [repo guidelines](https://konghq.atlassian.net/wiki/spaces/TK/pages/2737930261/Repository+management#koko).
-- [ ] 
+- [ ] Followed Naming Conventions
 
 
 ### Deployment Checklist
