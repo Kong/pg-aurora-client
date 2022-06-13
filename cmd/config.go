@@ -46,7 +46,7 @@ func loadPostgresConfig() (*pgConfig, error) {
 		tls = true
 	}
 
-	pgc := &pgConfig{ // "/config/ca_certs/global-bundle.pem"
+	pgc := &pgConfig{
 		user:           os.Getenv("PG_USER"),
 		password:       os.Getenv("PG_PASSWORD"),
 		hostURL:        os.Getenv("PG_HOST"),
@@ -54,7 +54,7 @@ func loadPostgresConfig() (*pgConfig, error) {
 		port:           os.Getenv("PG_PORT"),
 		database:       os.Getenv("PG_DATABASE"),
 		enableTLS:      tls,
-		caBundleFSPath: os.Getenv("PG_CA_BUNDLE_FS_PATH"),
+		caBundleFSPath: caBundleFSPath,
 	}
 
 	if err := validate(pgc); err != nil {

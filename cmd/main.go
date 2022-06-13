@@ -28,7 +28,9 @@ type pgConfig struct {
 
 var dsnNoTLS = "postgres://%s:%s@%s:%s/%s?sslmode=disable"
 
-var dsnTLS = "postgres://%s:%s@%s:%s/%s?sslmode=verify-full&sslrootcert=%s"
+var dsnTLS = "postgres://%s:%s@%s:%s/%s?sslmode=verify-ca&sslrootcert=%s"
+
+const caBundleFSPath = "/config/ca_certs/aws-postgres-cabundle-secret"
 
 func main() {
 	pgc, err := loadPostgresConfig()
@@ -45,9 +47,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := openDB(dsn)
+	db, err := openDB(dsn, pgc, logger)
 	if err != nil {
-		logger.Fatal("DB Connection failed", zap.Error(err))
+		logger.Info("DB Connection failed", zap.Error(err))
 	}
 	defer db.Close()
 	ac := &appContext{
@@ -58,7 +60,11 @@ func main() {
 	http.ListenAndServe("0.0.0.0:8080", ac.routes())
 }
 
-func openDB(dsn string) (*sql.DB, error) {
+func openDB(dsn string, pgc *pgConfig, logger *zap.Logger) (*sql.DB, error) {
+	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
+		zap.Bool("Enable TLS", pgc.enableTLS),
+		zap.String("user", pgc.user), zap.String("port", pgc.port),
+		zap.String("caBundlePath", pgc.caBundleFSPath))
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err

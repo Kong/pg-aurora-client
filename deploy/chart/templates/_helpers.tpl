@@ -85,6 +85,10 @@ Create database connection env vars
 - name: "PG_PASSWORD"
   valueFrom:
     secretKeyRef:
-      key: password
+      key: POSTGRES_PASSWORD
       name: {{ .Values.database.secret_name }}
+{{- if .Values.database.tls.enabled }}
+- name: "ENABLE_TLS"
+  value: "yes"
+{{- end }}
 {{- end }}
