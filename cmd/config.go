@@ -79,9 +79,5 @@ func validate(pgc *pgConfig) error {
 	if pgc.database == "" {
 		return fmt.Errorf("PG_DATABASE cannot be empty")
 	}
-	if pgc.enableTLS && pgc.caBundleFSPath == "" {
-		return fmt.Errorf("ENABLE_TLS requires a valid PG_CA_BUNDLE_FS_PATH")
-	}
 	return nil
-
 }

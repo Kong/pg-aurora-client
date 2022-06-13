@@ -64,7 +64,7 @@ func openDB(dsn string, pgc *pgConfig, logger *zap.Logger) (*sql.DB, error) {
 	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
 		zap.Bool("Enable TLS", pgc.enableTLS),
 		zap.String("user", pgc.user), zap.String("port", pgc.port),
-		zap.String("caBundlePath", pgc.caBundleFSPath))
+		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
