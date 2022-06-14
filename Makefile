@@ -15,7 +15,7 @@ build:
 docker-push:
 	docker build . -t  kongcloud/pg-aurora-client:${APP_VERSION}
 	docker push kongcloud/pg-aurora-client:${APP_VERSION}
-	docker push kongcloud/pg-aurora-client:${APP_VERSION}
+	docker push kongcloud/pg-aurora-client:${COMMIT_SHA}
 
 .PHONY: helm-template-dev
 ## helm-template-dev: generate helm template
