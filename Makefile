@@ -1,7 +1,7 @@
 GO111MODULES=on
 APP=pg-aurora-client
 COMMIT_SHA=$(shell git rev-parse --short HEAD)
-APP_VERSION=1.7
+APP_VERSION=17
 
 default: help
 
@@ -17,6 +17,10 @@ docker-push:
 	docker push kongcloud/pg-aurora-client:${APP_VERSION}
 	docker push kongcloud/pg-aurora-client:${APP_VERSION}
 
+.PHONY: helm-template-dev
+## helm-template-dev: generate helm template
+helm-template-dev:
+	helm template release-${APP_VERSION} ./deploy/chart -f ./deploy/chart/values-aws-dev-us-east-2.yaml > ./scratch/deploy-aws-tls-${APP_VERSION}.yaml
 
 .PHONY: clean
 ## clean: removes the binary files
