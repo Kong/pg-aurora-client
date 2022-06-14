@@ -13,7 +13,7 @@ build:
 .PHONY: docker-push
 ## docker-push: build and push image to docker hub
 docker-push:
-	docker build . -t  kongcloud/pg-aurora-client:latest
+	docker build . -t  kongcloud/pg-aurora-client:latest -t kongcloud/pg-aurora-client:${APP_VERSION} -t kongcloud/pg-aurora-client:${COMMIT_SHA}
 	docker push kongcloud/pg-aurora-client:latest
 	docker push kongcloud/pg-aurora-client:${APP_VERSION}
 	docker push kongcloud/pg-aurora-client:${COMMIT_SHA}
