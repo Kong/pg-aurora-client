@@ -2,6 +2,7 @@ package model
 
 import (
 	"database/sql"
+	"go.uber.org/zap"
 	"time"
 )
 
@@ -23,13 +24,26 @@ var replicaStatusQuery = `SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP FR
 
 var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREATED_AT DESC LIMIT 1`
 
+var insertFoo = `INSERT INTO foo (id) VALUES (default)`
+
 type Store struct {
-	DB *sql.DB
+	DB     *sql.DB
+	RODB   *sql.DB
+	Logger *zap.Logger
 }
 
-func (s *Store) GetReplicaStatus() ([]ReplicaStatus, error) {
+func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	rsList := []ReplicaStatus{}
-	rows, err := s.DB.Query(replicaStatusQuery)
+	var rows *sql.Rows
+	var err error
+	if ro && s.RODB != nil {
+		rows, err = s.RODB.Query(replicaStatusQuery)
+	} else {
+		if ro {
+			s.Logger.Warn("using rw connection because there ro connection is not injected")
+		}
+		rows, err = s.DB.Query(replicaStatusQuery)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +64,13 @@ func (s *Store) GetReplicaStatus() ([]ReplicaStatus, error) {
 
 func (s *Store) GetMostRecentFoo() (*Foo, error) {
 	var foo Foo
-	rows, err := s.DB.Query(getLastFooQuery)
+	var rows *sql.Rows
+	var err error
+	if s.RODB != nil {
+		rows, err = s.RODB.Query(getLastFooQuery)
+	} else {
+		rows, err = s.DB.Query(getLastFooQuery)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -65,4 +85,17 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 		}
 	}
 	return &foo, nil
+}
+
+func (s *Store) InsertFoo() (int64, error) {
+	exec, err := s.DB.Exec(insertFoo)
+	var affected int64
+	if err != nil {
+		return affected, err
+	}
+	affected, err = exec.RowsAffected()
+	if err != nil {
+		return affected, err
+	}
+	return affected, nil
 }

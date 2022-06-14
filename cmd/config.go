@@ -7,6 +7,23 @@ import (
 	"os"
 )
 
+type pgConfig struct {
+	user           string
+	database       string
+	password       string
+	hostURL        string
+	roHostURL      string
+	port           string
+	enableTLS      bool
+	caBundleFSPath string
+}
+
+var dsnNoTLS = "postgres://%s:%s@%s:%s/%s?sslmode=disable"
+
+var dsnTLS = "postgres://%s:%s@%s:%s/%s?sslmode=verify-ca&sslrootcert=%s"
+
+const caBundleFSPath = "/config/ca_certs/aws-postgres-cabundle-secret"
+
 // Logger is setup on startup by cmd package.
 var Logger *zap.Logger
 var zapConfig zap.Config

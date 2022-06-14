@@ -1,6 +1,6 @@
 image:
   repository: "kongcloud/pg-aurora-client"
-  tag: "1.2"
+  tag: "1.7"
   pullPolicy: IfNotPresent
 
 autoscaling:

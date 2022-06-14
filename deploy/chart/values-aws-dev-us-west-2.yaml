@@ -3,7 +3,7 @@ aws:
 
 database:
   tls:
-    enabled : false
+    enabled : true
   hosts:
     rw: "rw.kadmin.aurora.internal.kongcloud.io"
     ro: "ro.kadmin.aurora.internal.kongcloud.io"

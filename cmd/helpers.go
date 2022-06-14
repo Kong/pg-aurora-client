@@ -13,9 +13,7 @@ func (ac *appContext) writeJSON(w http.ResponseWriter, status int, data envelope
 	if err != nil {
 		return err
 	}
-
 	js = append(js, '\n')
-
 	for key, value := range headers {
 		w.Header()[key] = value
 	}

@@ -15,46 +15,48 @@ type appContext struct {
 	Logger *zap.Logger
 }
 
-type pgConfig struct {
-	user           string
-	database       string
-	password       string
-	hostURL        string
-	roHostURL      string
-	port           string
-	enableTLS      bool
-	caBundleFSPath string
-}
-
-var dsnNoTLS = "postgres://%s:%s@%s:%s/%s?sslmode=disable"
-
-var dsnTLS = "postgres://%s:%s@%s:%s/%s?sslmode=verify-ca&sslrootcert=%s"
-
-const caBundleFSPath = "/config/ca_certs/aws-postgres-cabundle-secret"
-
 func main() {
 	pgc, err := loadPostgresConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
 	var dsn string
+	var rodsn string
 	if !pgc.enableTLS {
 		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
+		if pgc.roHostURL != "" {
+			rodsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
+		}
 	} else {
 		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+		if pgc.roHostURL != "" {
+			rodsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database,
+				pgc.caBundleFSPath)
+		}
 	}
-	logger, err := SetupLogging("debug")
+	logger, err := SetupLogging("info")
 	if err != nil {
 		log.Fatal(err)
 	}
 	db, err := openDB(dsn, pgc, logger)
 	if err != nil {
-		logger.Info("DB Connection failed", zap.Error(err))
+		logger.Error("DB Connection failed", zap.Error(err))
 	}
 	defer db.Close()
+	logger.Info("Established DB Connection")
+
 	ac := &appContext{
-		Store:  &model.Store{DB: db},
+		Store:  &model.Store{DB: db, Logger: logger},
 		Logger: logger,
+	}
+	if rodsn != "" {
+		rodb, err := openDB(rodsn, pgc, logger)
+		if err != nil {
+			logger.Error("DB RO Connection failed", zap.Error(err))
+		}
+		defer rodb.Close()
+		ac.Store.RODB = rodb
+		logger.Info("Established RO DB Connection")
 	}
 	ac.Logger.Info("Application is running on : 8080 .....")
 	http.ListenAndServe("0.0.0.0:8080", ac.routes())
