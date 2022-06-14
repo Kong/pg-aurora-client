@@ -1,7 +1,7 @@
 GO111MODULES=on
 APP=pg-aurora-client
 COMMIT_SHA=$(shell git rev-parse --short HEAD)
-APP_VERSION=17
+APP_VERSION=18
 
 default: help
 
@@ -13,7 +13,8 @@ build:
 .PHONY: docker-push
 ## docker-push: build and push image to docker hub
 docker-push:
-	docker build . -t  kongcloud/pg-aurora-client:${APP_VERSION}
+	docker build . -t  kongcloud/pg-aurora-client:latest
+	docker push kongcloud/pg-aurora-client:latest
 	docker push kongcloud/pg-aurora-client:${APP_VERSION}
 	docker push kongcloud/pg-aurora-client:${COMMIT_SHA}
 
