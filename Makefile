@@ -12,8 +12,8 @@ build:
 .PHONY: docker-push
 ## docker-push: build and push image to docker hub
 docker-push:
-	docker build . -t  kongcloud/pg-aurora-client:1.2
-	docker push kongcloud/pg-aurora-client:1.2
+	docker build . -t  kongcloud/pg-aurora-client:1.4
+	docker push kongcloud/pg-aurora-client:1.4
 
 
 .PHONY: clean
