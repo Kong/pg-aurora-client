@@ -11,3 +11,6 @@ database:
   username: failover-test
   db_name: failover-test
   secret_name: pg-aurora-client-secret
+
+domain: 'konghq.tech'
+subdomain: 'us-east-2.pg-client'
