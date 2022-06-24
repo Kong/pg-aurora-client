@@ -1,22 +1,10 @@
 package model
 
 import (
+	"context"
 	"database/sql"
-	"go.uber.org/zap"
-	"time"
+	"github.com/jackc/pgx/v4"
 )
-
-type ReplicaStatus struct {
-	ServerID    string    `json:"serverID"`
-	SessionID   string    `json:"sessionID"`
-	LastUpdated time.Time `json:"lastUpdated"`
-}
-
-type Foo struct {
-	ID          string    `json:"id"`
-	Created     time.Time `json:"created"`
-	LastUpdated time.Time `json:"lastUpdated"`
-}
 
 var replicaStatusQuery = `SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP FROM aurora_replica_status()
      WHERE EXTRACT(EPOCH FROM(NOW() - LAST_UPDATE_TIMESTAMP)) <= 300 OR SESSION_ID = 'MASTER_SESSION_ID'
@@ -26,11 +14,7 @@ var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREAT
 
 var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
-type Store struct {
-	DB     *sql.DB
-	RODB   *sql.DB
-	Logger *zap.Logger
-}
+var getControlPlanesQuery = `SELECT org_id, control_plane_id FROM default_runtime_group_relations`
 
 func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	rsList := []ReplicaStatus{}
@@ -98,4 +82,28 @@ func (s *Store) InsertFoo() (int64, error) {
 		return affected, err
 	}
 	return affected, nil
+}
+
+func (s *Store) GetControlPlanes() ([]ControlPlane, error) {
+	cpList := []ControlPlane{}
+	var rows pgx.Rows
+	var err error
+	ctx := context.Background()
+	rows, err = s.DBPool.Query(ctx, getControlPlanesQuery)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cp ControlPlane
+		err := rows.Scan(
+			&cp.OrgID,
+			&cp.ControlPlaneID)
+		if err != nil {
+			return nil, err
+		}
+		cpList = append(cpList, cp)
+	}
+	return cpList, nil
 }

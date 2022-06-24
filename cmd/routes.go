@@ -12,6 +12,7 @@ func (ac *appContext) routes() http.Handler {
 	r.HandleFunc("/foo", ac.getPGFoo).Methods("GET")
 	r.HandleFunc("/foo", ac.postPGFoo).Methods("POST")
 	r.HandleFunc("/health", ac.getHealth).Methods("GET")
+	r.HandleFunc("/cp", ac.getControlPlanes).Methods("GET")
 	return r
 }
 
@@ -75,6 +76,21 @@ func (ac *appContext) postPGFoo(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	payload := envelope{"rowsInserted": foo}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) getControlPlanes(w http.ResponseWriter, _ *http.Request) {
+	cpList, err := ac.Store.GetControlPlanes()
+	if err != nil {
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
+		return
+	}
+	payload := envelope{"cpList": cpList}
 	err = ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
 		ac.logError(err)

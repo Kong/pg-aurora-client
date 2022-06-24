@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/model"
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
@@ -38,15 +41,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := openDB(dsn, pgc, logger)
+	pool, err := openPool(dsn, pgc, logger)
 	if err != nil {
 		logger.Error("DB Connection failed", zap.Error(err))
 	}
-	defer db.Close()
+	defer pool.Close()
 	logger.Info("Established DB Connection")
 
 	ac := &appContext{
-		Store:  &model.Store{DB: db, Logger: logger},
+		Store:  &model.Store{DBPool: pool, Logger: logger},
 		Logger: logger,
 	}
 	if rodsn != "" {
@@ -75,4 +78,46 @@ func openDB(dsn string, pgc *pgConfig, logger *zap.Logger) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+var tenantID = "001c5e3c-6086-4c66-b0de-8b5eba9fa655"
+
+func openPool(dsn string, pgc *pgConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
+	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
+		zap.Bool("Enable TLS", pgc.enableTLS),
+		zap.String("user", pgc.user), zap.String("port", pgc.port),
+		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	config.BeforeAcquire = func(ctx context.Context, c *pgx.Conn) bool {
+		logger.Info("Before acquire..")
+		_, err := c.Exec(ctx, fmt.Sprintf("SELECT set_tenant('%s')", tenantID))
+		if err != nil {
+			logger.Error("Setting tenant id failed", zap.Error(err))
+			return false
+		}
+		return true
+	}
+	config.AfterRelease = func(conn *pgx.Conn) bool {
+		logger.Info("After release..")
+		_, err := conn.Exec(ctx, "SELECT unset_tenant()")
+		if err != nil {
+			logger.Error("Unsetting tenant id failed", zap.Error(err))
+			return false
+		}
+		return true
+	}
+
+	dbpool, err := pgxpool.ConnectConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	err = dbpool.Ping(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return dbpool, nil
 }
