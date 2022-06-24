@@ -21,11 +21,18 @@ spec:
     - host: {{ $fqdn | quote }}
       http:
         paths:
-          - path: /
+          - path: /pg
             pathType: ImplementationSpecific
             backend:
               service:
                 name: {{ $fullName }}
+                port:
+                  number: {{ .Values.service.port }}
+          - path: /pgx
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $fullName }}-pgx
                 port:
                   number: {{ .Values.service.port }}
   {{- end }}

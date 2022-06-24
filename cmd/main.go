@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/model"
 	"go.uber.org/zap"
@@ -63,7 +62,7 @@ func main() {
 	http.ListenAndServe("0.0.0.0:8080", ac.routes())
 }
 
-var tenantID = "001c5e3c-6086-4c66-b0de-8b5eba9fa655"
+//var tenantID = "001c5e3c-6086-4c66-b0de-8b5eba9fa655"
 
 func openPool(dsn string, pgc *pgConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
 	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
@@ -75,24 +74,24 @@ func openPool(dsn string, pgc *pgConfig, logger *zap.Logger) (*pgxpool.Pool, err
 	if err != nil {
 		return nil, err
 	}
-	config.BeforeAcquire = func(ctx context.Context, c *pgx.Conn) bool {
-		logger.Info("Before acquire..")
-		_, err := c.Exec(ctx, fmt.Sprintf("SELECT set_tenant('%s')", tenantID))
-		if err != nil {
-			logger.Error("Setting tenant id failed", zap.Error(err))
-			return false
-		}
-		return true
-	}
-	config.AfterRelease = func(conn *pgx.Conn) bool {
-		logger.Info("After release..")
-		_, err := conn.Exec(ctx, "SELECT unset_tenant()")
-		if err != nil {
-			logger.Error("Unsetting tenant id failed", zap.Error(err))
-			return false
-		}
-		return true
-	}
+	//config.BeforeAcquire = func(ctx context.Context, c *pgx.Conn) bool {
+	//	logger.Info("Before acquire..")
+	//	_, err := c.Exec(ctx, fmt.Sprintf("SELECT set_tenant('%s')", tenantID))
+	//	if err != nil {
+	//		logger.Error("Setting tenant id failed", zap.Error(err))
+	//		return false
+	//	}
+	//	return true
+	//}
+	//config.AfterRelease = func(conn *pgx.Conn) bool {
+	//	logger.Info("After release..")
+	//	_, err := conn.Exec(ctx, "SELECT unset_tenant()")
+	//	if err != nil {
+	//		logger.Error("Unsetting tenant id failed", zap.Error(err))
+	//		return false
+	//	}
+	//	return true
+	//}
 
 	dbpool, err := pgxpool.ConnectConfig(ctx, config)
 	if err != nil {
