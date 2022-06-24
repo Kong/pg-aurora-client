@@ -99,3 +99,8 @@ func (s *Store) InsertFoo() (int64, error) {
 	}
 	return affected, nil
 }
+
+func (s *Store) GetConnectionPoolStats() sql.DBStats {
+	stat := s.DB.Stats()
+	return stat
+}
