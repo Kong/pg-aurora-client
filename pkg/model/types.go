@@ -1,17 +1,15 @@
 package model
 
 import (
-	"database/sql"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
 	"time"
 )
 
 type Store struct {
-	DB     *sql.DB
-	RODB   *sql.DB
-	DBPool *pgxpool.Pool
-	Logger *zap.Logger
+	DBPool   *pgxpool.Pool
+	RODBPool *pgxpool.Pool
+	Logger   *zap.Logger
 }
 
 type ReplicaStatus struct {
@@ -29,4 +27,13 @@ type Foo struct {
 type ControlPlane struct {
 	OrgID          string
 	ControlPlaneID string
+}
+
+type PoolStats struct {
+	AcquireCount    int64
+	AcquireDuration time.Duration
+	AcquiredConns   int32
+	IdleConns       int32
+	TotalConns      int32
+	MaxConns        int32
 }

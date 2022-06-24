@@ -2,7 +2,6 @@ package model
 
 import (
 	"context"
-	"database/sql"
 	"github.com/jackc/pgx/v4"
 )
 
@@ -18,15 +17,16 @@ var getControlPlanesQuery = `SELECT org_id, control_plane_id FROM default_runtim
 
 func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	rsList := []ReplicaStatus{}
-	var rows *sql.Rows
+	var rows pgx.Rows
 	var err error
-	if ro && s.RODB != nil {
-		rows, err = s.RODB.Query(replicaStatusQuery)
+	ctx := context.Background()
+	if ro && s.RODBPool != nil {
+		rows, err = s.RODBPool.Query(ctx, replicaStatusQuery)
 	} else {
 		if ro {
 			s.Logger.Warn("using rw connection because there ro connection is not injected")
 		}
-		rows, err = s.DB.Query(replicaStatusQuery)
+		rows, err = s.DBPool.Query(ctx, replicaStatusQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -48,12 +48,13 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 
 func (s *Store) GetMostRecentFoo() (*Foo, error) {
 	var foo Foo
-	var rows *sql.Rows
+	var rows pgx.Rows
 	var err error
-	if s.RODB != nil {
-		rows, err = s.RODB.Query(getLastFooQuery)
+	ctx := context.Background()
+	if s.RODBPool != nil {
+		rows, err = s.RODBPool.Query(ctx, getLastFooQuery)
 	} else {
-		rows, err = s.DB.Query(getLastFooQuery)
+		rows, err = s.DBPool.Query(ctx, getLastFooQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -72,15 +73,13 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 }
 
 func (s *Store) InsertFoo() (int64, error) {
-	exec, err := s.DB.Exec(insertFoo)
+	ctx := context.Background()
+	exec, err := s.DBPool.Exec(ctx, insertFoo)
 	var affected int64
 	if err != nil {
 		return affected, err
 	}
-	affected, err = exec.RowsAffected()
-	if err != nil {
-		return affected, err
-	}
+	affected = exec.RowsAffected()
 	return affected, nil
 }
 
@@ -106,4 +105,17 @@ func (s *Store) GetControlPlanes() ([]ControlPlane, error) {
 		cpList = append(cpList, cp)
 	}
 	return cpList, nil
+}
+
+func (s *Store) GetConnectionPoolStats() *PoolStats {
+	stat := s.DBPool.Stat()
+	poolstats := &PoolStats{
+		AcquireCount:    stat.AcquireCount(),
+		AcquireDuration: stat.AcquireDuration(),
+		AcquiredConns:   stat.AcquiredConns(),
+		IdleConns:       stat.IdleConns(),
+		TotalConns:      stat.TotalConns(),
+		MaxConns:        stat.MaxConns(),
+	}
+	return poolstats
 }

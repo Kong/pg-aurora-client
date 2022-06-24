@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/model"
-	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
@@ -53,31 +51,16 @@ func main() {
 		Logger: logger,
 	}
 	if rodsn != "" {
-		rodb, err := openDB(rodsn, pgc, logger)
+		rodbPool, err := openPool(rodsn, pgc, logger)
 		if err != nil {
 			logger.Error("DB RO Connection failed", zap.Error(err))
 		}
-		defer rodb.Close()
-		ac.Store.RODB = rodb
+		defer rodbPool.Close()
+		ac.Store.RODBPool = rodbPool
 		logger.Info("Established RO DB Connection")
 	}
 	ac.Logger.Info("Application is running on : 8080 .....")
 	http.ListenAndServe("0.0.0.0:8080", ac.routes())
-}
-
-func openDB(dsn string, pgc *pgConfig, logger *zap.Logger) (*sql.DB, error) {
-	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
-		zap.Bool("Enable TLS", pgc.enableTLS),
-		zap.String("user", pgc.user), zap.String("port", pgc.port),
-		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, err
-	}
-	if err = db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
 }
 
 var tenantID = "001c5e3c-6086-4c66-b0de-8b5eba9fa655"

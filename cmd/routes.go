@@ -12,7 +12,8 @@ func (ac *appContext) routes() http.Handler {
 	r.HandleFunc("/foo", ac.getPGFoo).Methods("GET")
 	r.HandleFunc("/foo", ac.postPGFoo).Methods("POST")
 	r.HandleFunc("/health", ac.getHealth).Methods("GET")
-	r.HandleFunc("/cp", ac.getControlPlanes).Methods("GET")
+	r.HandleFunc("/controlplane", ac.getControlPlanes).Methods("GET")
+	r.HandleFunc("/poolstats", ac.getConnectionPoolStats).Methods("GET")
 	return r
 }
 
@@ -92,6 +93,16 @@ func (ac *appContext) getControlPlanes(w http.ResponseWriter, _ *http.Request) {
 	}
 	payload := envelope{"cpList": cpList}
 	err = ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) getConnectionPoolStats(w http.ResponseWriter, _ *http.Request) {
+	stats := ac.Store.GetConnectionPoolStats()
+	payload := envelope{"connectionPoolStats": *stats}
+	err := ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
 		ac.logError(err)
 	}
