@@ -15,6 +15,9 @@ type appContext struct {
 	Logger *zap.Logger
 }
 
+const defaultMaxConn = 50
+const defaultMaxIdleConns = 20
+
 func main() {
 	pgc, err := loadPostgresConfig()
 	if err != nil {
@@ -45,6 +48,9 @@ func main() {
 	defer db.Close()
 	logger.Info("Established DB Connection")
 
+	db.SetMaxOpenConns(defaultMaxConn)
+	db.SetMaxIdleConns(defaultMaxIdleConns)
+
 	ac := &appContext{
 		Store:  &model.Store{DB: db, Logger: logger},
 		Logger: logger,
@@ -55,6 +61,8 @@ func main() {
 			logger.Error("DB RO Connection failed", zap.Error(err))
 		}
 		defer rodb.Close()
+		rodb.SetMaxOpenConns(defaultMaxConn)
+		rodb.SetMaxIdleConns(defaultMaxIdleConns)
 		ac.Store.RODB = rodb
 		logger.Info("Established RO DB Connection")
 	}
