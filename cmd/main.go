@@ -15,6 +15,9 @@ type appContext struct {
 	Logger *zap.Logger
 }
 
+const defaultMaxConnections = 50
+const defaultMinConnections = 20
+
 func main() {
 	pgc, err := loadPostgresConfig()
 	if err != nil {
@@ -92,6 +95,8 @@ func openPool(dsn string, pgc *pgConfig, logger *zap.Logger) (*pgxpool.Pool, err
 	//	}
 	//	return true
 	//}
+	config.MaxConns = defaultMaxConnections
+	config.MinConns = defaultMinConnections
 
 	dbpool, err := pgxpool.ConnectConfig(ctx, config)
 	if err != nil {
