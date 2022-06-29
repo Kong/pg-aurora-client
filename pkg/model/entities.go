@@ -19,10 +19,13 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	rsList := []ReplicaStatus{}
 	var rows pgx.Rows
 	var err error
+	var host string
 	ctx := context.Background()
 	if ro && s.RODBPool != nil {
 		rows, err = s.RODBPool.Query(ctx, replicaStatusQuery)
+		host = s.RODBPool.Config().ConnConfig.Host
 	} else {
+		host = s.DBPool.Config().ConnConfig.Host
 		if ro {
 			s.Logger.Warn("using rw connection because there ro connection is not injected")
 		}
@@ -41,6 +44,7 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 		if err != nil {
 			return nil, err
 		}
+		rs.Host = host
 		rsList = append(rsList, rs)
 	}
 	return rsList, nil

@@ -16,6 +16,7 @@ type ReplicaStatus struct {
 	ServerID    string    `json:"serverID"`
 	SessionID   string    `json:"sessionID"`
 	LastUpdated time.Time `json:"lastUpdated"`
+	Host        string    `json:"host"`
 }
 
 type Foo struct {
