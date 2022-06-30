@@ -37,6 +37,11 @@ def poolstats():
     return JSONResponse(res.status_code, res.headers, res.json())
 
 
+def ropoolstats():
+    res = requests.request("GET", base_url.format('ropoolstats'), headers=headers, verify=False)
+    return JSONResponse(res.status_code, res.headers, res.json())
+
+
 def get_foo():
     res = requests.request("GET", base_url.format('foo'), headers=headers, verify=False)
     return JSONResponse(res.status_code, res.headers, res.json())
@@ -54,6 +59,8 @@ def make_pgx_calls():
     print('ro       {}'.format(response))
     response = poolstats()
     print('pool     {}'.format(response))
+    response = ropoolstats()
+    print('ropool   {}'.format(response))
     response = get_foo()
     print('getfoo   {}'.format(response))
     response = post_foo()
