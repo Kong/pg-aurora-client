@@ -62,7 +62,7 @@ def make_pgx_calls():
 
 if __name__ == '__main__':
     print('starting pgx run..')
-    for i in range(1, 2):
+    for i in range(1, 500):
         make_pgx_calls()
         print('==')
         time.sleep(2)

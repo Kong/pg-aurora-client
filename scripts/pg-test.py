@@ -61,8 +61,8 @@ def make_pg_calls():
 
 
 if __name__ == '__main__':
-    print('starting pgx run..')
-    for i in range(1, 3):
+    print('starting pg run..')
+    for i in range(1, 500):
         make_pg_calls()
         print('==')
         time.sleep(2)

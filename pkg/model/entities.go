@@ -123,3 +123,16 @@ func (s *Store) GetConnectionPoolStats() *PoolStats {
 	}
 	return poolstats
 }
+
+func (s *Store) GetROConnectionPoolStats() *PoolStats {
+	stat := s.RODBPool.Stat()
+	poolstats := &PoolStats{
+		AcquireCount:    stat.AcquireCount(),
+		AcquireDuration: stat.AcquireDuration(),
+		AcquiredConns:   stat.AcquiredConns(),
+		IdleConns:       stat.IdleConns(),
+		TotalConns:      stat.TotalConns(),
+		MaxConns:        stat.MaxConns(),
+	}
+	return poolstats
+}
