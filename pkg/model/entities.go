@@ -104,3 +104,8 @@ func (s *Store) GetConnectionPoolStats() sql.DBStats {
 	stat := s.DB.Stats()
 	return stat
 }
+
+func (s *Store) GetROConnectionPoolStats() sql.DBStats {
+	stat := s.RODB.Stats()
+	return stat
+}

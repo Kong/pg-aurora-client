@@ -13,6 +13,7 @@ func (ac *appContext) routes() http.Handler {
 	r.HandleFunc("/foo", ac.postPGFoo).Methods("POST")
 	r.HandleFunc("/health", ac.getHealth).Methods("GET")
 	r.HandleFunc("/poolstats", ac.getConnectionPoolStats).Methods("GET")
+	r.HandleFunc("/ropoolstats", ac.getROConnectionPoolStats).Methods("GET")
 	return r
 }
 
@@ -45,7 +46,7 @@ func (ac *appContext) getROReplicationStatus(w http.ResponseWriter, _ *http.Requ
 		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
 		return
 	}
-	payload := envelope{"replicaStatusList": status}
+	payload := envelope{"roreplicaStatusList": status}
 	err = ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
 		ac.logError(err)
@@ -86,6 +87,16 @@ func (ac *appContext) postPGFoo(w http.ResponseWriter, _ *http.Request) {
 func (ac *appContext) getConnectionPoolStats(w http.ResponseWriter, _ *http.Request) {
 	stats := ac.Store.GetConnectionPoolStats()
 	payload := envelope{"connectionPoolStats": stats}
+	err := ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) getROConnectionPoolStats(w http.ResponseWriter, _ *http.Request) {
+	stats := ac.Store.GetROConnectionPoolStats()
+	payload := envelope{"roconnectionPoolStats": stats}
 	err := ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
 		ac.logError(err)
