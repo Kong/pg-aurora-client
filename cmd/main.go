@@ -3,8 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/kong/pg-aurora-client/pkg/model"
-	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
@@ -43,7 +43,7 @@ func main() {
 	}
 	db, err := openDB(dsn, pgc, logger)
 	if err != nil {
-		logger.Error("DB Connection failed", zap.Error(err))
+		logger.Fatal("DB Connection failed", zap.Error(err))
 	}
 	defer db.Close()
 	logger.Info("Established DB Connection")
@@ -58,7 +58,7 @@ func main() {
 	if rodsn != "" {
 		rodb, err := openDB(rodsn, pgc, logger)
 		if err != nil {
-			logger.Error("DB RO Connection failed", zap.Error(err))
+			logger.Fatal("DB RO Connection failed", zap.Error(err))
 		}
 		defer rodb.Close()
 		rodb.SetMaxOpenConns(defaultMaxConn)
@@ -75,7 +75,7 @@ func openDB(dsn string, pgc *pgConfig, logger *zap.Logger) (*sql.DB, error) {
 		zap.Bool("Enable TLS", pgc.enableTLS),
 		zap.String("user", pgc.user), zap.String("port", pgc.port),
 		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
