@@ -1,7 +1,9 @@
 package model
 
 import (
-	"database/sql"
+	"context"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
 	"time"
 )
@@ -26,23 +28,37 @@ var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREAT
 
 var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
+var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
+
+var roHealthQuery = `SELECT id,Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
+
 type Store struct {
-	DB     *sql.DB
-	RODB   *sql.DB
-	Logger *zap.Logger
+	DBPool   *pgxpool.Pool
+	RODBPool *pgxpool.Pool
+	Logger   *zap.Logger
+}
+
+type PoolStats struct {
+	AcquireCount    int64
+	AcquireDuration time.Duration
+	AcquiredConns   int32
+	IdleConns       int32
+	TotalConns      int32
+	MaxConns        int32
 }
 
 func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	rsList := []ReplicaStatus{}
-	var rows *sql.Rows
+	var rows pgx.Rows
 	var err error
-	if ro && s.RODB != nil {
-		rows, err = s.RODB.Query(replicaStatusQuery)
+	ctx := context.Background()
+	if ro && s.RODBPool != nil {
+		rows, err = s.RODBPool.Query(ctx, replicaStatusQuery)
 	} else {
 		if ro {
 			s.Logger.Warn("using rw connection because there ro connection is not injected")
 		}
-		rows, err = s.DB.Query(replicaStatusQuery)
+		rows, err = s.DBPool.Query(ctx, replicaStatusQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -64,12 +80,13 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 
 func (s *Store) GetMostRecentFoo() (*Foo, error) {
 	var foo Foo
-	var rows *sql.Rows
+	var rows pgx.Rows
 	var err error
-	if s.RODB != nil {
-		rows, err = s.RODB.Query(getLastFooQuery)
+	ctx := context.Background()
+	if s.RODBPool != nil {
+		rows, err = s.RODBPool.Query(ctx, getLastFooQuery)
 	} else {
-		rows, err = s.DB.Query(getLastFooQuery)
+		rows, err = s.DBPool.Query(ctx, getLastFooQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -88,24 +105,38 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 }
 
 func (s *Store) InsertFoo() (int64, error) {
-	exec, err := s.DB.Exec(insertFoo)
+	ctx := context.Background()
+	exec, err := s.DBPool.Exec(ctx, insertFoo)
 	var affected int64
 	if err != nil {
 		return affected, err
 	}
-	affected, err = exec.RowsAffected()
-	if err != nil {
-		return affected, err
-	}
+	affected = exec.RowsAffected()
 	return affected, nil
 }
 
-func (s *Store) GetConnectionPoolStats() sql.DBStats {
-	stat := s.DB.Stats()
-	return stat
+func (s *Store) GetConnectionPoolStats() *PoolStats {
+	stat := s.DBPool.Stat()
+	poolstats := &PoolStats{
+		AcquireCount:    stat.AcquireCount(),
+		AcquireDuration: stat.AcquireDuration(),
+		AcquiredConns:   stat.AcquiredConns(),
+		IdleConns:       stat.IdleConns(),
+		TotalConns:      stat.TotalConns(),
+		MaxConns:        stat.MaxConns(),
+	}
+	return poolstats
 }
 
-func (s *Store) GetROConnectionPoolStats() sql.DBStats {
-	stat := s.RODB.Stats()
-	return stat
+func (s *Store) GetROConnectionPoolStats() *PoolStats {
+	stat := s.RODBPool.Stat()
+	poolstats := &PoolStats{
+		AcquireCount:    stat.AcquireCount(),
+		AcquireDuration: stat.AcquireDuration(),
+		AcquiredConns:   stat.AcquiredConns(),
+		IdleConns:       stat.IdleConns(),
+		TotalConns:      stat.TotalConns(),
+		MaxConns:        stat.MaxConns(),
+	}
+	return poolstats
 }
