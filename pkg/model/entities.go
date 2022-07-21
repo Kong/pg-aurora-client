@@ -14,6 +14,12 @@ type ReplicaStatus struct {
 	LastUpdated time.Time `json:"lastUpdated"`
 }
 
+type Canary struct {
+	ID          int64     `json:"ID"`
+	LastUpdated time.Time `json:"lastUpdated"`
+	DiffMS      float64   `json:"diffMS"`
+}
+
 type Foo struct {
 	ID          string    `json:"id"`
 	Created     time.Time `json:"created"`
@@ -30,7 +36,7 @@ var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
 var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 
-var roHealthQuery = `SELECT id,Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
+var roHealthQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
 type Store struct {
 	DBPool   *pgxpool.Pool
@@ -139,4 +145,41 @@ func (s *Store) GetROConnectionPoolStats() *PoolStats {
 		MaxConns:        stat.MaxConns(),
 	}
 	return poolstats
+}
+
+func (s *Store) UpdatePoolHealthCheck() (int64, error) {
+	ctx := context.Background()
+	exec, err := s.DBPool.Exec(ctx, updateHealthQuery)
+	var affected int64
+	if err != nil {
+		return affected, err
+	}
+	affected = exec.RowsAffected()
+	return affected, nil
+}
+
+func (s *Store) GetPoolHealthCheck() (*Canary, error) {
+	var canary Canary
+	var rows pgx.Rows
+	var err error
+	ctx := context.Background()
+	if s.RODBPool != nil {
+		rows, err = s.RODBPool.Query(ctx, roHealthQuery)
+	} else {
+		rows, err = s.DBPool.Query(ctx, roHealthQuery)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		err := rows.Scan(
+			&canary.ID,
+			&canary.LastUpdated,
+			&canary.DiffMS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &canary, nil
 }
