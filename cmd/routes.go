@@ -15,6 +15,7 @@ func (ac *appContext) routes() http.Handler {
 	r.HandleFunc("/poolstats", ac.getConnectionPoolStats).Methods("GET")
 	r.HandleFunc("/ropoolstats", ac.getROConnectionPoolStats).Methods("GET")
 	r.HandleFunc("/rocanary", ac.getROCanary).Methods("GET")
+	r.HandleFunc("/canary", ac.updateCanary).Methods("PUT")
 	return r
 }
 
@@ -117,4 +118,19 @@ func (ac *appContext) getROCanary(w http.ResponseWriter, _ *http.Request) {
 	if err != nil {
 		ac.logError(err)
 	}
+}
+
+func (ac *appContext) updateCanary(w http.ResponseWriter, _ *http.Request) {
+	rows, err := ac.Store.UpdatePoolHealthCheck()
+	if err != nil {
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
+		return
+	}
+	payload := envelope{"rowsUpdate": rows}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
 }
