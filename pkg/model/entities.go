@@ -2,11 +2,15 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
 	"time"
 )
+
+const defaultMaxConnections = 50
+const defaultMinConnections = 20
 
 type ReplicaStatus struct {
 	ServerID    string    `json:"serverID"`
@@ -39,9 +43,51 @@ var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 var roHealthQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
 type Store struct {
-	DBPool   *pgxpool.Pool
-	RODBPool *pgxpool.Pool
+	dbPool   *pgxpool.Pool
+	roDBPool *pgxpool.Pool
 	Logger   *zap.Logger
+}
+
+func NewStore(logger *zap.Logger) (*Store, error) {
+	pgc, err := loadPostgresConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	var dsn string
+	var rodsn string
+	if !pgc.enableTLS {
+		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
+		if pgc.roHostURL != "" {
+			rodsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
+		}
+	} else {
+		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+		if pgc.roHostURL != "" {
+			rodsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database,
+				pgc.caBundleFSPath)
+		}
+	}
+	pool, err := openPool(dsn, pgc, logger)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("Established DB Connection")
+	store := &Store{
+		dbPool: pool,
+		Logger: logger,
+	}
+
+	if rodsn != "" {
+		rodbPool, err := openPool(rodsn, pgc, logger)
+		if err != nil {
+			return nil, err
+		}
+
+		store.roDBPool = rodbPool
+		logger.Info("Established RO DB Connection")
+	}
+	return store, nil
 }
 
 type PoolStats struct {
@@ -58,13 +104,13 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	var rows pgx.Rows
 	var err error
 	ctx := context.Background()
-	if ro && s.RODBPool != nil {
-		rows, err = s.RODBPool.Query(ctx, replicaStatusQuery)
+	if ro && s.roDBPool != nil {
+		rows, err = s.roDBPool.Query(ctx, replicaStatusQuery)
 	} else {
 		if ro {
 			s.Logger.Warn("using rw connection because there ro connection is not injected")
 		}
-		rows, err = s.DBPool.Query(ctx, replicaStatusQuery)
+		rows, err = s.dbPool.Query(ctx, replicaStatusQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -89,10 +135,10 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 	var rows pgx.Rows
 	var err error
 	ctx := context.Background()
-	if s.RODBPool != nil {
-		rows, err = s.RODBPool.Query(ctx, getLastFooQuery)
+	if s.roDBPool != nil {
+		rows, err = s.roDBPool.Query(ctx, getLastFooQuery)
 	} else {
-		rows, err = s.DBPool.Query(ctx, getLastFooQuery)
+		rows, err = s.dbPool.Query(ctx, getLastFooQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -112,7 +158,7 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 
 func (s *Store) InsertFoo() (int64, error) {
 	ctx := context.Background()
-	exec, err := s.DBPool.Exec(ctx, insertFoo)
+	exec, err := s.dbPool.Exec(ctx, insertFoo)
 	var affected int64
 	if err != nil {
 		return affected, err
@@ -122,7 +168,7 @@ func (s *Store) InsertFoo() (int64, error) {
 }
 
 func (s *Store) GetConnectionPoolStats() *PoolStats {
-	stat := s.DBPool.Stat()
+	stat := s.dbPool.Stat()
 	poolstats := &PoolStats{
 		AcquireCount:    stat.AcquireCount(),
 		AcquireDuration: stat.AcquireDuration(),
@@ -135,7 +181,7 @@ func (s *Store) GetConnectionPoolStats() *PoolStats {
 }
 
 func (s *Store) GetROConnectionPoolStats() *PoolStats {
-	stat := s.RODBPool.Stat()
+	stat := s.roDBPool.Stat()
 	poolstats := &PoolStats{
 		AcquireCount:    stat.AcquireCount(),
 		AcquireDuration: stat.AcquireDuration(),
@@ -149,7 +195,7 @@ func (s *Store) GetROConnectionPoolStats() *PoolStats {
 
 func (s *Store) UpdatePoolHealthCheck() (int64, error) {
 	ctx := context.Background()
-	exec, err := s.DBPool.Exec(ctx, updateHealthQuery)
+	exec, err := s.dbPool.Exec(ctx, updateHealthQuery)
 	var affected int64
 	if err != nil {
 		return affected, err
@@ -163,10 +209,10 @@ func (s *Store) GetPoolHealthCheck() (*Canary, error) {
 	var rows pgx.Rows
 	var err error
 	ctx := context.Background()
-	if s.RODBPool != nil {
-		rows, err = s.RODBPool.Query(ctx, roHealthQuery)
+	if s.roDBPool != nil {
+		rows, err = s.roDBPool.Query(ctx, roHealthQuery)
 	} else {
-		rows, err = s.DBPool.Query(ctx, roHealthQuery)
+		rows, err = s.dbPool.Query(ctx, roHealthQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -182,4 +228,40 @@ func (s *Store) GetPoolHealthCheck() (*Canary, error) {
 		}
 	}
 	return &canary, nil
+}
+
+func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
+	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
+		zap.Bool("Enable TLS", pgc.enableTLS),
+		zap.String("user", pgc.user), zap.String("port", pgc.port),
+		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	config.MaxConns = defaultMaxConnections
+	config.MinConns = defaultMinConnections
+
+	dbpool, err := pgxpool.ConnectConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	err = dbpool.Ping(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return dbpool, nil
+}
+
+func (s *Store) Close() {
+	if s.dbPool != nil {
+		s.dbPool.Close()
+	}
+
+	if s.roDBPool != nil {
+		s.roDBPool.Close()
+	}
+
 }
