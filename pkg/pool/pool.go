@@ -5,9 +5,9 @@ import (
 	"github.com/kong/pg-aurora-client/pkg/model"
 )
 
-type ValidateWriteFunc func(ctx context.Context, store *model.Store) (bool, error)
+type ValidateWriteFunc func(ctx context.Context, store *model.Store) (interface{}, error)
 
-type ValidateReadFunc func(ctx context.Context, store *model.Store) (bool, error)
+type ValidateReadFunc func(ctx context.Context, store *model.Store) (interface{}, error)
 
 type auroraValidator struct {
 	store             *model.Store
@@ -16,15 +16,15 @@ type auroraValidator struct {
 }
 
 type ConnectionValidator interface {
-	ValidateWrite(ctx context.Context) (bool, error)
-	ValidateRead(ctx context.Context) (bool, error)
+	ValidateWrite(ctx context.Context) (interface{}, error)
+	ValidateRead(ctx context.Context) (interface{}, error)
 }
 
-func (v *auroraValidator) ValidateWrite(ctx context.Context) (bool, error) {
+func (v *auroraValidator) ValidateWrite(ctx context.Context) (interface{}, error) {
 	return v.validateWriteFunc(ctx, v.store)
 }
 
-func (v *auroraValidator) ValidateRead(ctx context.Context) (bool, error) {
+func (v *auroraValidator) ValidateRead(ctx context.Context) (interface{}, error) {
 	return v.validateReadFunc(ctx, v.store)
 }
 

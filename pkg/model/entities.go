@@ -38,7 +38,7 @@ var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREAT
 
 var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
-var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
+var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
 
 var roHealthQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
@@ -193,15 +193,25 @@ func (s *Store) GetROConnectionPoolStats() *PoolStats {
 	return poolstats
 }
 
-func (s *Store) UpdatePoolHealthCheck() (int64, error) {
+func (s *Store) UpdatePoolHealthCheck() (interface{}, error) {
+	var canary Canary
+	var rows pgx.Rows
+	var err error
 	ctx := context.Background()
-	exec, err := s.dbPool.Exec(ctx, updateHealthQuery)
-	var affected int64
+	rows, err = s.dbPool.Query(ctx, updateHealthQuery)
 	if err != nil {
-		return affected, err
+		return nil, err
 	}
-	affected = exec.RowsAffected()
-	return affected, nil
+	defer rows.Close()
+	if rows.Next() {
+		err := rows.Scan(
+			&canary.ID,
+			&canary.LastUpdated)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &canary, nil
 }
 
 func (s *Store) GetPoolHealthCheck() (*Canary, error) {
