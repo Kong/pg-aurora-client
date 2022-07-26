@@ -193,7 +193,7 @@ func (s *Store) GetROConnectionPoolStats() *PoolStats {
 	return poolstats
 }
 
-func (s *Store) UpdatePoolHealthCheck() (interface{}, error) {
+func (s *Store) UpdatePoolHealthCheck() (*Canary, error) {
 	var canary Canary
 	var rows pgx.Rows
 	var err error
