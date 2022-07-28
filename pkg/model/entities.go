@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
 	"time"
 )
@@ -43,8 +44,8 @@ var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETU
 var roHealthQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
 type Store struct {
-	dbPool   *pgxpool.Pool
-	roDBPool *pgxpool.Pool
+	dbPool   pool.PGXConnPool
+	roDBPool pool.PGXConnPool
 	Logger   *zap.Logger
 }
 
@@ -240,7 +241,7 @@ func (s *Store) GetPoolHealthCheck() (*Canary, error) {
 	return &canary, nil
 }
 
-func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
+func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (pool.PGXConnPool, error) {
 	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
 		zap.Bool("Enable TLS", pgc.enableTLS),
 		zap.String("user", pgc.user), zap.String("port", pgc.port),
@@ -254,11 +255,7 @@ func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (*pgxpool.Pool, err
 	config.MaxConns = defaultMaxConnections
 	config.MinConns = defaultMinConnections
 
-	dbpool, err := pgxpool.ConnectConfig(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-	err = dbpool.Ping(ctx)
+	dbpool, err := pool.NewAuroraPool(ctx, config, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -273,5 +270,4 @@ func (s *Store) Close() {
 	if s.roDBPool != nil {
 		s.roDBPool.Close()
 	}
-
 }

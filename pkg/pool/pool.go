@@ -4,35 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"github.com/kong/pg-aurora-client/pkg/model"
+	"errors"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"go.uber.org/zap"
 	"time"
 )
 
-type ValidateWriteFunc func(ctx context.Context, store *model.Store) (interface{}, error)
-
-type ValidateReadFunc func(ctx context.Context, store *model.Store) (interface{}, error)
-
-type auroraValidator struct {
-	store             *model.Store
-	validateWriteFunc ValidateWriteFunc
-	validateReadFunc  ValidateReadFunc
-}
-
 type ConnectionValidator interface {
-	ValidateWrite(ctx context.Context) (interface{}, error)
-	ValidateRead(ctx context.Context) (interface{}, error)
-}
-
-func (v *auroraValidator) ValidateWrite(ctx context.Context) (interface{}, error) {
-	return v.validateWriteFunc(ctx, v.store)
-}
-
-func (v *auroraValidator) ValidateRead(ctx context.Context) (interface{}, error) {
-	return v.validateReadFunc(ctx, v.store)
-}
-
-func NewDefaultConnValidator(store *model.Store, writeFunc ValidateWriteFunc, readFunc ValidateReadFunc) ConnectionValidator {
-	return &auroraValidator{store: store, validateWriteFunc: writeFunc, validateReadFunc: readFunc}
+	ValidateWrite(ctx context.Context) error
+	ValidateRead(ctx context.Context) error
 }
 
 // ConnPool db conns pool interface
@@ -63,6 +45,145 @@ type ConnPool interface {
 	SetConnMaxLifetime(d time.Duration)
 	SetMaxIdleConns(n int)
 	SetMaxOpenConns(n int)
-
 	Stats() sql.DBStats
+}
+
+type PGXConnPool interface {
+	Close()
+	Acquire(ctx context.Context) (*pgxpool.Conn, error)
+	AcquireFunc(ctx context.Context, f func(*pgxpool.Conn) error) error
+	AcquireAllIdle(ctx context.Context) []*pgxpool.Conn
+	Config() *pgxpool.Config
+	Stat() *pgxpool.Stat
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+	QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{}, f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error)
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+	Begin(ctx context.Context) (pgx.Tx, error)
+	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
+	BeginFunc(ctx context.Context, f func(pgx.Tx) error) error
+	BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions, f func(pgx.Tx) error) error
+	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
+	Ping(ctx context.Context) error
+}
+
+type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
+
+type AuroraPGPool struct {
+	innerPool         *pgxpool.Pool
+	WriteValidateFunc ValidationFunction
+	ReadValidateFunc  ValidationFunction
+	logger            *zap.Logger
+}
+
+func (p *AuroraPGPool) Close() {
+	p.innerPool.Close()
+}
+
+func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
+	return p.innerPool.Acquire(ctx)
+}
+
+func (p *AuroraPGPool) AcquireFunc(ctx context.Context, f func(*pgxpool.Conn) error) error {
+	return p.innerPool.AcquireFunc(ctx, f)
+}
+
+func (p *AuroraPGPool) AcquireAllIdle(ctx context.Context) []*pgxpool.Conn {
+	return p.innerPool.AcquireAllIdle(ctx)
+}
+
+func (p *AuroraPGPool) Config() *pgxpool.Config {
+	return p.innerPool.Config()
+}
+
+func (p *AuroraPGPool) Stat() *pgxpool.Stat {
+	return p.innerPool.Stat()
+}
+
+func (p *AuroraPGPool) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
+	return p.innerPool.Exec(ctx, sql, arguments...)
+}
+
+func (p *AuroraPGPool) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	return p.innerPool.Query(ctx, sql, args...)
+}
+
+func (p *AuroraPGPool) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	return p.innerPool.QueryRow(ctx, sql, args...)
+}
+
+func (p *AuroraPGPool) QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{},
+	f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error) {
+	return p.innerPool.QueryFunc(ctx, sql, args, scans, f)
+}
+
+func (p *AuroraPGPool) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	return p.innerPool.SendBatch(ctx, b)
+}
+
+func (p *AuroraPGPool) Begin(ctx context.Context) (pgx.Tx, error) {
+	return p.innerPool.Begin(ctx)
+}
+
+func (p *AuroraPGPool) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+	return p.innerPool.BeginTx(ctx, txOptions)
+}
+
+func (p *AuroraPGPool) BeginFunc(ctx context.Context, f func(pgx.Tx) error) error {
+	return p.innerPool.BeginFunc(ctx, f)
+}
+
+func (p *AuroraPGPool) BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions, f func(pgx.Tx) error) error {
+	return p.innerPool.BeginTxFunc(ctx, txOptions, f)
+}
+
+func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string,
+	rowSrc pgx.CopyFromSource) (int64, error) {
+	return p.innerPool.CopyFrom(ctx, tableName, columnNames, rowSrc)
+}
+
+func (p *AuroraPGPool) Ping(ctx context.Context) error {
+	return p.innerPool.Ping(ctx)
+}
+
+func (p *AuroraPGPool) ValidateWrite(ctx context.Context) error {
+	conn, err := p.innerPool.Acquire(ctx)
+	defer conn.Release()
+	if err != nil {
+		return err
+	}
+	validated := p.WriteValidateFunc(ctx, conn, p.logger)
+	if !validated {
+		return errors.New("write validation failed")
+	}
+	return nil
+}
+
+func (p *AuroraPGPool) ValidateRead(ctx context.Context) error {
+	conn, err := p.innerPool.Acquire(ctx)
+	defer conn.Release()
+	if err != nil {
+		return err
+	}
+	validated := p.ReadValidateFunc(ctx, conn, p.logger)
+	if !validated {
+		return errors.New("read validation failed")
+	}
+	return nil
+}
+
+func NewAuroraPool(ctx context.Context, config *pgxpool.Config, logger *zap.Logger) (*AuroraPGPool, error) {
+	dbpool, err := pgxpool.ConnectConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	err = dbpool.Ping(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &AuroraPGPool{
+		innerPool: dbpool,
+		logger:    logger,
+	}, nil
 }
