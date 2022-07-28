@@ -1,7 +1,11 @@
 package model
 
 import (
+	"context"
 	"fmt"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/kong/pg-aurora-client/pkg/pool"
+	"go.uber.org/zap"
 	"os"
 )
 
@@ -41,7 +45,7 @@ func validate(pgc *PgConfig) error {
 	return nil
 }
 
-func loadPostgresConfig() (*PgConfig, error) {
+func LoadPostgresConfig() (*PgConfig, error) {
 	isSecure := os.Getenv("ENABLE_TLS")
 	var tls = false
 	if isSecure == "yes" || isSecure == "true" {
@@ -63,4 +67,58 @@ func loadPostgresConfig() (*PgConfig, error) {
 		return nil, err
 	}
 	return pgc, nil
+}
+
+func getDSN(pgc *PgConfig) string {
+	var dsn string
+	if !pgc.enableTLS {
+		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
+	} else {
+		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+	}
+	return dsn
+}
+
+func getRODSN(pgc *PgConfig) string {
+	var dsn string
+	if !pgc.enableTLS {
+		if pgc.roHostURL == "" {
+			dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
+		} else {
+			dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
+		}
+	} else {
+		if pgc.roHostURL == "" {
+			dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+		} else {
+			dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+		}
+	}
+	return dsn
+}
+
+func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (pool.PGXConnPool, error) {
+	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
+		zap.Bool("Enable TLS", pgc.enableTLS),
+		zap.String("user", pgc.user), zap.String("port", pgc.port),
+		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	config.MaxConns = defaultMaxConnections
+	config.MinConns = defaultMinConnections
+	apConfig := &pool.Config{
+		PGXConfig:      config,
+		WriteValidator: pool.DefaultWriteValidator,
+		ReadValidator:  pool.DefaultReadValidator,
+	}
+
+	dbpool, err := pool.NewAuroraPool(ctx, apConfig, logger)
+	if err != nil {
+		return nil, err
+	}
+	return dbpool, nil
 }

@@ -13,18 +13,24 @@ type appContext struct {
 }
 
 func main() {
+	pgc, err := model.LoadPostgresConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
 	logger, err := SetupLogging("info")
 	if err != nil {
 		log.Fatal(err)
 	}
-	store, err := model.NewStore(logger)
+	s, err := model.NewStore(logger, pgc)
 	if err != nil {
-		logger.Fatal("Failed setting up store", zap.Error(err))
+		log.Fatal(err)
 	}
+	defer s.Close()
 
-	ac := &appContext{Store: store, Logger: logger}
-	defer store.Close()
-
+	ac := &appContext{
+		Store:  s,
+		Logger: logger,
+	}
 	ac.Logger.Info("Application is running on : 8080 .....")
 	http.ListenAndServe("0.0.0.0:8080", ac.routes())
 }

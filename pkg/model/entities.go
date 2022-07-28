@@ -2,9 +2,7 @@ package model
 
 import (
 	"context"
-	"fmt"
 	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
 	"time"
@@ -39,9 +37,9 @@ var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREAT
 
 var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
-var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
+var getCanaryQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
-var roHealthQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
+var updateCanaryQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
 
 type Store struct {
 	dbPool   pool.PGXConnPool
@@ -49,44 +47,26 @@ type Store struct {
 	Logger   *zap.Logger
 }
 
-func NewStore(logger *zap.Logger) (*Store, error) {
-	pgc, err := loadPostgresConfig()
-	if err != nil {
-		return nil, err
-	}
+func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
 
-	var dsn string
-	var rodsn string
-	if !pgc.enableTLS {
-		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
-		if pgc.roHostURL != "" {
-			rodsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
-		}
-	} else {
-		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
-		if pgc.roHostURL != "" {
-			rodsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database,
-				pgc.caBundleFSPath)
-		}
-	}
+	dsn := getDSN(pgc)
+	rodsn := getRODSN(pgc)
+
 	pool, err := openPool(dsn, pgc, logger)
 	if err != nil {
 		return nil, err
 	}
 	logger.Info("Established DB Connection")
-	store := &Store{
-		dbPool: pool,
-		Logger: logger,
+	rodbPool, err := openPool(rodsn, pgc, logger)
+	if err != nil {
+		return nil, err
 	}
+	logger.Info("Established RO DB Connection")
 
-	if rodsn != "" {
-		rodbPool, err := openPool(rodsn, pgc, logger)
-		if err != nil {
-			return nil, err
-		}
-
-		store.roDBPool = rodbPool
-		logger.Info("Established RO DB Connection")
+	store := &Store{
+		dbPool:   pool,
+		roDBPool: rodbPool,
+		Logger:   logger,
 	}
 	return store, nil
 }
@@ -194,12 +174,12 @@ func (s *Store) GetROConnectionPoolStats() *PoolStats {
 	return poolstats
 }
 
-func (s *Store) UpdatePoolHealthCheck() (*Canary, error) {
+func (s *Store) UpdateCanary() (*Canary, error) {
 	var canary Canary
 	var rows pgx.Rows
 	var err error
 	ctx := context.Background()
-	rows, err = s.dbPool.Query(ctx, updateHealthQuery)
+	rows, err = s.dbPool.Query(ctx, updateCanaryQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -215,16 +195,12 @@ func (s *Store) UpdatePoolHealthCheck() (*Canary, error) {
 	return &canary, nil
 }
 
-func (s *Store) GetPoolHealthCheck() (*Canary, error) {
+func (s *Store) GetCanary() (*Canary, error) {
 	var canary Canary
 	var rows pgx.Rows
 	var err error
 	ctx := context.Background()
-	if s.roDBPool != nil {
-		rows, err = s.roDBPool.Query(ctx, roHealthQuery)
-	} else {
-		rows, err = s.dbPool.Query(ctx, roHealthQuery)
-	}
+	rows, err = s.roDBPool.Query(ctx, getCanaryQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -239,32 +215,6 @@ func (s *Store) GetPoolHealthCheck() (*Canary, error) {
 		}
 	}
 	return &canary, nil
-}
-
-func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (pool.PGXConnPool, error) {
-	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
-		zap.Bool("Enable TLS", pgc.enableTLS),
-		zap.String("user", pgc.user), zap.String("port", pgc.port),
-		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
-	ctx := context.Background()
-	config, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	config.MaxConns = defaultMaxConnections
-	config.MinConns = defaultMinConnections
-	apConfig := &pool.Config{
-		PGXConfig:      config,
-		WriteValidator: pool.DefaultWriteValidator,
-		ReadValidator:  pool.DefaultReadValidator,
-	}
-
-	dbpool, err := pool.NewAuroraPool(ctx, apConfig, logger)
-	if err != nil {
-		return nil, err
-	}
-	return dbpool, nil
 }
 
 func (s *Store) Close() {
