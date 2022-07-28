@@ -1,18 +1,14 @@
-package pool_test
+package pool
 
 import (
 	"context"
 	"fmt"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/kong/pg-aurora-client/pkg/pool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
-	"runtime/debug"
 	"testing"
-	"time"
 )
 
 func setupPGEnv(t *testing.T) {
@@ -38,63 +34,6 @@ func setupLogging() (*zap.Logger, error) {
 	return logger, nil
 }
 
-var writerQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
-
-var readerQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
-
-type Canary struct {
-	ID          int64     `json:"ID"`
-	LastUpdated time.Time `json:"lastUpdated"`
-	DiffMS      float64   `json:"diffMS"`
-}
-
-func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	var canary Canary
-	var rows pgx.Rows
-	var err error
-	rows, err = conn.Query(ctx, writerQuery)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	if rows.Next() {
-		err := rows.Scan(
-			&canary.ID,
-			&canary.LastUpdated)
-		if err != nil {
-			logger.Sugar().Errorf("%s\n%s", err.Error(), debug.Stack())
-			return false
-		}
-	}
-	logger.Info("Write Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated))
-	return true
-}
-
-func reader(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	var canary Canary
-	var rows pgx.Rows
-	var err error
-	rows, err = conn.Query(ctx, readerQuery)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	if rows.Next() {
-		err := rows.Scan(
-			&canary.ID,
-			&canary.LastUpdated,
-			&canary.DiffMS)
-		if err != nil {
-			logger.Sugar().Errorf("%s\n%s", err.Error(), debug.Stack())
-			return false
-		}
-	}
-	logger.Info("Read Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated),
-		zap.Float64("diff_ms", canary.DiffMS))
-
-	return true
-}
-
 func TestAuroraPGPool_ValidateWrite(t *testing.T) {
 	setupPGEnv(t)
 	logger, err := setupLogging()
@@ -105,9 +44,13 @@ func TestAuroraPGPool_ValidateWrite(t *testing.T) {
 	config, err := pgxpool.ParseConfig(dsn)
 	require.NoError(t, err)
 	ctx := context.Background()
+	apConfig := &Config{
+		PGXConfig:      config,
+		WriteValidator: DefaultWriteValidator,
+		ReadValidator:  DefaultReadValidator,
+	}
 
-	testPool, err := pool.NewAuroraPool(ctx, config, logger)
-	testPool.WriteValidateFunc = writer
+	testPool, err := NewAuroraPool(ctx, apConfig, logger)
 	err = testPool.ValidateWrite(ctx)
 	require.NoError(t, err)
 }
@@ -122,9 +65,13 @@ func TestAuroraPGPool_ValidateRead(t *testing.T) {
 	config, err := pgxpool.ParseConfig(dsn)
 	require.NoError(t, err)
 	ctx := context.Background()
+	apConfig := &Config{
+		PGXConfig:      config,
+		WriteValidator: DefaultWriteValidator,
+		ReadValidator:  DefaultReadValidator,
+	}
 
-	testPool, err := pool.NewAuroraPool(ctx, config, logger)
-	testPool.ReadValidateFunc = reader
+	testPool, err := NewAuroraPool(ctx, apConfig, logger)
 	err = testPool.ValidateRead(ctx)
 	require.NoError(t, err)
 }

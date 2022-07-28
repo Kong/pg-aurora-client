@@ -254,8 +254,13 @@ func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (pool.PGXConnPool, 
 
 	config.MaxConns = defaultMaxConnections
 	config.MinConns = defaultMinConnections
+	apConfig := &pool.Config{
+		PGXConfig:      config,
+		WriteValidator: pool.DefaultWriteValidator,
+		ReadValidator:  pool.DefaultReadValidator,
+	}
 
-	dbpool, err := pool.NewAuroraPool(ctx, config, logger)
+	dbpool, err := pool.NewAuroraPool(ctx, apConfig, logger)
 	if err != nil {
 		return nil, err
 	}

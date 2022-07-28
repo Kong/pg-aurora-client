@@ -72,8 +72,8 @@ type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *za
 
 type AuroraPGPool struct {
 	innerPool         *pgxpool.Pool
-	WriteValidateFunc ValidationFunction
-	ReadValidateFunc  ValidationFunction
+	writeValidateFunc ValidationFunction
+	readValidateFunc  ValidationFunction
 	logger            *zap.Logger
 }
 
@@ -148,12 +148,15 @@ func (p *AuroraPGPool) Ping(ctx context.Context) error {
 }
 
 func (p *AuroraPGPool) ValidateWrite(ctx context.Context) error {
+	if p.writeValidateFunc == nil {
+		return errors.New("no WriteValidateFunc set")
+	}
 	conn, err := p.innerPool.Acquire(ctx)
 	defer conn.Release()
 	if err != nil {
 		return err
 	}
-	validated := p.WriteValidateFunc(ctx, conn, p.logger)
+	validated := p.writeValidateFunc(ctx, conn, p.logger)
 	if !validated {
 		return errors.New("write validation failed")
 	}
@@ -161,20 +164,23 @@ func (p *AuroraPGPool) ValidateWrite(ctx context.Context) error {
 }
 
 func (p *AuroraPGPool) ValidateRead(ctx context.Context) error {
+	if p.readValidateFunc == nil {
+		return errors.New("no ReadValidateFunc set")
+	}
 	conn, err := p.innerPool.Acquire(ctx)
 	defer conn.Release()
 	if err != nil {
 		return err
 	}
-	validated := p.ReadValidateFunc(ctx, conn, p.logger)
+	validated := p.readValidateFunc(ctx, conn, p.logger)
 	if !validated {
 		return errors.New("read validation failed")
 	}
 	return nil
 }
 
-func NewAuroraPool(ctx context.Context, config *pgxpool.Config, logger *zap.Logger) (*AuroraPGPool, error) {
-	dbpool, err := pgxpool.ConnectConfig(ctx, config)
+func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*AuroraPGPool, error) {
+	dbpool, err := pgxpool.ConnectConfig(ctx, config.PGXConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +189,11 @@ func NewAuroraPool(ctx context.Context, config *pgxpool.Config, logger *zap.Logg
 		return nil, err
 	}
 	return &AuroraPGPool{
-		innerPool: dbpool,
-		logger:    logger,
+		innerPool:         dbpool,
+		logger:            logger,
+		writeValidateFunc: config.WriteValidator,
+		readValidateFunc:  config.ReadValidator,
 	}, nil
+
+	// Start the validator
 }
