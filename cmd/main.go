@@ -1,8 +1,6 @@
 package main
 
 import (
-	"database/sql"
-	"fmt"
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/kong/pg-aurora-client/pkg/model"
 	"go.uber.org/zap"
@@ -15,72 +13,25 @@ type appContext struct {
 	Logger *zap.Logger
 }
 
-const defaultMaxConn = 50
-const defaultMaxIdleConns = 20
-
 func main() {
-	pgc, err := loadPostgresConfig()
+	pgc, err := model.LoadPostgresConfig()
 	if err != nil {
 		log.Fatal(err)
-	}
-	var dsn string
-	var rodsn string
-	if !pgc.enableTLS {
-		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
-		if pgc.roHostURL != "" {
-			rodsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
-		}
-	} else {
-		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
-		if pgc.roHostURL != "" {
-			rodsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database,
-				pgc.caBundleFSPath)
-		}
 	}
 	logger, err := SetupLogging("info")
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := openDB(dsn, pgc, logger)
+	s, err := model.NewStore(logger, pgc)
 	if err != nil {
-		logger.Fatal("DB Connection failed", zap.Error(err))
+		log.Fatal(err)
 	}
-	defer db.Close()
-	logger.Info("Established DB Connection")
-
-	db.SetMaxOpenConns(defaultMaxConn)
-	db.SetMaxIdleConns(defaultMaxIdleConns)
+	defer s.Close()
 
 	ac := &appContext{
-		Store:  &model.Store{DB: db, Logger: logger},
+		Store:  s,
 		Logger: logger,
-	}
-	if rodsn != "" {
-		rodb, err := openDB(rodsn, pgc, logger)
-		if err != nil {
-			logger.Fatal("DB RO Connection failed", zap.Error(err))
-		}
-		defer rodb.Close()
-		rodb.SetMaxOpenConns(defaultMaxConn)
-		rodb.SetMaxIdleConns(defaultMaxIdleConns)
-		ac.Store.RODB = rodb
-		logger.Info("Established RO DB Connection")
 	}
 	ac.Logger.Info("Application is running on : 8080 .....")
 	http.ListenAndServe("0.0.0.0:8080", ac.routes())
-}
-
-func openDB(dsn string, pgc *pgConfig, logger *zap.Logger) (*sql.DB, error) {
-	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
-		zap.Bool("Enable TLS", pgc.enableTLS),
-		zap.String("user", pgc.user), zap.String("port", pgc.port),
-		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, err
-	}
-	if err = db.Ping(); err != nil {
-		return nil, err
-	}
-	return db, nil
 }

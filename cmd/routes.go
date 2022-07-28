@@ -14,6 +14,8 @@ func (ac *appContext) routes() http.Handler {
 	r.HandleFunc("/health", ac.getHealth).Methods("GET")
 	r.HandleFunc("/poolstats", ac.getConnectionPoolStats).Methods("GET")
 	r.HandleFunc("/ropoolstats", ac.getROConnectionPoolStats).Methods("GET")
+	r.HandleFunc("/canary", ac.getCanary).Methods("GET")
+	r.HandleFunc("/canary", ac.upsertCanary).Methods("POST")
 	return r
 }
 
@@ -98,6 +100,36 @@ func (ac *appContext) getROConnectionPoolStats(w http.ResponseWriter, _ *http.Re
 	stats := ac.Store.GetROConnectionPoolStats()
 	payload := envelope{"roconnectionPoolStats": stats}
 	err := ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) getCanary(w http.ResponseWriter, _ *http.Request) {
+	canary, err := ac.Store.GetCanary()
+	if err != nil {
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
+		return
+	}
+	payload := envelope{"canary": canary}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) upsertCanary(w http.ResponseWriter, _ *http.Request) {
+	canary, err := ac.Store.UpdateCanary()
+	if err != nil {
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
+		return
+	}
+	payload := envelope{"canary": canary}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
 		ac.logError(err)
 	}

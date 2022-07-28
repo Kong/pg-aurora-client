@@ -41,7 +41,7 @@ func validate(pgc *PgConfig) error {
 	return nil
 }
 
-func loadPostgresConfig() (*PgConfig, error) {
+func LoadPostgresConfig() (*PgConfig, error) {
 	isSecure := os.Getenv("ENABLE_TLS")
 	var tls = false
 	if isSecure == "yes" || isSecure == "true" {
@@ -63,4 +63,32 @@ func loadPostgresConfig() (*PgConfig, error) {
 		return nil, err
 	}
 	return pgc, nil
+}
+
+func getDSN(pgc *PgConfig) string {
+	var dsn string
+	if !pgc.enableTLS {
+		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
+	} else {
+		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+	}
+	return dsn
+}
+
+func getRODSN(pgc *PgConfig) string {
+	var dsn string
+	if !pgc.enableTLS {
+		if pgc.roHostURL == "" {
+			dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
+		} else {
+			dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
+		}
+	} else {
+		if pgc.roHostURL == "" {
+			dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+		} else {
+			dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
+		}
+	}
+	return dsn
 }

@@ -36,11 +36,12 @@ func TestAuroraValidator_ValidateWrite(t *testing.T) {
 	setupPGEnv(t)
 	logger, err := setupLogging()
 	require.NoError(t, err)
-	s, err := NewStore(logger)
+	pgc, err := LoadPostgresConfig()
 	require.NoError(t, err)
-	canary, err := s.UpdateCanary()
+	s, err := NewStore(logger, pgc)
+	require.NoError(t, err)
+	_, err = s.UpdateCanary()
 	if err != nil {
 		return
 	}
-	logger.Info("Canary rows updated", zap.Int64("Eows", canary))
 }

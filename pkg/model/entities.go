@@ -2,7 +2,6 @@ package model
 
 import (
 	"database/sql"
-	"fmt"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
 	"time"
@@ -20,6 +19,12 @@ type Foo struct {
 	LastUpdated time.Time `json:"lastUpdated"`
 }
 
+type Canary struct {
+	ID          int64     `json:"ID"`
+	LastUpdated time.Time `json:"lastUpdated"`
+	DiffMS      float64   `json:"diffMS"`
+}
+
 var replicaStatusQuery = `SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP FROM aurora_replica_status()
      WHERE EXTRACT(EPOCH FROM(NOW() - LAST_UPDATE_TIMESTAMP)) <= 300 OR SESSION_ID = 'MASTER_SESSION_ID'
      ORDER BY LAST_UPDATE_TIMESTAMP DESC`
@@ -28,7 +33,9 @@ var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREAT
 
 var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
-var updateHealthQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
+var getCanaryQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
+
+var updateCanaryQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
 
 type Store struct {
 	DB     *sql.DB
@@ -104,17 +111,45 @@ func (s *Store) InsertFoo() (int64, error) {
 	return affected, nil
 }
 
-func (s *Store) UpdateCanary() (int64, error) {
-	exec, err := s.DB.Exec(updateHealthQuery)
-	var affected int64
+func (s *Store) UpdateCanary() (*Canary, error) {
+	var canary Canary
+	var rows *sql.Rows
+	var err error
+	rows, err = s.DB.Query(updateCanaryQuery)
 	if err != nil {
-		return affected, err
+		return nil, err
 	}
-	affected, err = exec.RowsAffected()
+	defer rows.Close()
+	if rows.Next() {
+		err := rows.Scan(
+			&canary.ID,
+			&canary.LastUpdated)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &canary, nil
+}
+
+func (s *Store) GetCanary() (*Canary, error) {
+	var canary Canary
+	var rows *sql.Rows
+	var err error
+	rows, err = s.RODB.Query(getCanaryQuery)
 	if err != nil {
-		return affected, err
+		return nil, err
 	}
-	return affected, nil
+	defer rows.Close()
+	if rows.Next() {
+		err := rows.Scan(
+			&canary.ID,
+			&canary.LastUpdated,
+			&canary.DiffMS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &canary, nil
 }
 
 func (s *Store) GetConnectionPoolStats() sql.DBStats {
@@ -127,44 +162,41 @@ func (s *Store) GetROConnectionPoolStats() sql.DBStats {
 	return stat
 }
 
-func NewStore(logger *zap.Logger) (*Store, error) {
-	pgc, err := loadPostgresConfig()
-	if err != nil {
-		return nil, err
+func (s *Store) Close() {
+	if s.DB != nil {
+		err := s.DB.Close()
+		if err != nil {
+			s.Logger.Error("Error closing DB", zap.Error(err))
+		}
 	}
+	if s.RODB != nil {
+		err := s.RODB.Close()
+		if err != nil {
+			s.Logger.Error("Error closing RODB", zap.Error(err))
+		}
+	}
+}
 
-	var dsn string
-	var rodsn string
-	if !pgc.enableTLS {
-		dsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database)
-		if pgc.roHostURL != "" {
-			rodsn = fmt.Sprintf(dsnNoTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database)
-		}
-	} else {
-		dsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.hostURL, pgc.port, pgc.database, pgc.caBundleFSPath)
-		if pgc.roHostURL != "" {
-			rodsn = fmt.Sprintf(dsnTLS, pgc.user, pgc.password, pgc.roHostURL, pgc.port, pgc.database,
-				pgc.caBundleFSPath)
-		}
-	}
+func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
+
+	dsn := getDSN(pgc)
+	rodsn := getRODSN(pgc)
+
 	pool, err := openPool(dsn, pgc, logger)
 	if err != nil {
 		return nil, err
 	}
 	logger.Info("Established DB Connection")
+	rodbPool, err := openPool(rodsn, pgc, logger)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("Established RO DB Connection")
+
 	store := &Store{
 		DB:     pool,
+		RODB:   rodbPool,
 		Logger: logger,
-	}
-
-	if rodsn != "" {
-		rodbPool, err := openPool(rodsn, pgc, logger)
-		if err != nil {
-			return nil, err
-		}
-
-		store.RODB = rodbPool
-		logger.Info("Established RO DB Connection")
 	}
 	return store, nil
 }
