@@ -46,12 +46,11 @@ func TestAuroraPGPool_ValidateWrite(t *testing.T) {
 	ctx := context.Background()
 	apConfig := &Config{
 		PGXConfig:      config,
-		WriteValidator: DefaultWriteValidator,
-		ReadValidator:  DefaultReadValidator,
+		QueryValidator: DefaultWriteValidator,
 	}
 
 	testPool, err := NewAuroraPool(ctx, apConfig, logger)
-	err = testPool.ValidateWrite(ctx)
+	err = testPool.ValidateQuery(ctx)
 	require.NoError(t, err)
 }
 
@@ -67,12 +66,11 @@ func TestAuroraPGPool_ValidateRead(t *testing.T) {
 	ctx := context.Background()
 	apConfig := &Config{
 		PGXConfig:      config,
-		WriteValidator: DefaultWriteValidator,
-		ReadValidator:  DefaultReadValidator,
+		QueryValidator: DefaultWriteValidator,
 	}
 
 	testPool, err := NewAuroraPool(ctx, apConfig, logger)
-	err = testPool.ValidateRead(ctx)
+	err = testPool.ValidateQuery(ctx)
 	require.NoError(t, err)
 }
 

@@ -42,7 +42,7 @@ var getCanaryQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts)
 var updateCanaryQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
 
 type Store struct {
-	dbPool   pool.PGXConnPool
+	rwDBPool pool.PGXConnPool
 	roDBPool pool.PGXConnPool
 	Logger   *zap.Logger
 }
@@ -52,20 +52,20 @@ func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
 	dsn := getDSN(pgc)
 	rodsn := getRODSN(pgc)
 
-	pool, err := openPool(dsn, pgc, logger)
+	rwPool, err := openPool(dsn, pgc, logger, pool.DefaultWriteValidator)
 	if err != nil {
 		return nil, err
 	}
 	logger.Info("Established DB Connection")
-	rodbPool, err := openPool(rodsn, pgc, logger)
+	roPool, err := openPool(rodsn, pgc, logger, pool.DefaultReadValidator)
 	if err != nil {
 		return nil, err
 	}
 	logger.Info("Established RO DB Connection")
 
 	store := &Store{
-		dbPool:   pool,
-		roDBPool: rodbPool,
+		rwDBPool: rwPool,
+		roDBPool: roPool,
 		Logger:   logger,
 	}
 	return store, nil
@@ -91,7 +91,7 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 		if ro {
 			s.Logger.Warn("using rw connection because there ro connection is not injected")
 		}
-		rows, err = s.dbPool.Query(ctx, replicaStatusQuery)
+		rows, err = s.rwDBPool.Query(ctx, replicaStatusQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 	if s.roDBPool != nil {
 		rows, err = s.roDBPool.Query(ctx, getLastFooQuery)
 	} else {
-		rows, err = s.dbPool.Query(ctx, getLastFooQuery)
+		rows, err = s.rwDBPool.Query(ctx, getLastFooQuery)
 	}
 	if err != nil {
 		return nil, err
@@ -139,7 +139,7 @@ func (s *Store) GetMostRecentFoo() (*Foo, error) {
 
 func (s *Store) InsertFoo() (int64, error) {
 	ctx := context.Background()
-	exec, err := s.dbPool.Exec(ctx, insertFoo)
+	exec, err := s.rwDBPool.Exec(ctx, insertFoo)
 	var affected int64
 	if err != nil {
 		return affected, err
@@ -149,7 +149,7 @@ func (s *Store) InsertFoo() (int64, error) {
 }
 
 func (s *Store) GetConnectionPoolStats() *PoolStats {
-	stat := s.dbPool.Stat()
+	stat := s.rwDBPool.Stat()
 	poolstats := &PoolStats{
 		AcquireCount:    stat.AcquireCount(),
 		AcquireDuration: stat.AcquireDuration(),
@@ -179,7 +179,7 @@ func (s *Store) UpdateCanary() (*Canary, error) {
 	var rows pgx.Rows
 	var err error
 	ctx := context.Background()
-	rows, err = s.dbPool.Query(ctx, updateCanaryQuery)
+	rows, err = s.rwDBPool.Query(ctx, updateCanaryQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -218,8 +218,8 @@ func (s *Store) GetCanary() (*Canary, error) {
 }
 
 func (s *Store) Close() {
-	if s.dbPool != nil {
-		s.dbPool.Close()
+	if s.rwDBPool != nil {
+		s.rwDBPool.Close()
 	}
 
 	if s.roDBPool != nil {

@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
+	"reflect"
+	"sync"
 	"time"
 )
 
@@ -71,14 +73,80 @@ type PGXConnPool interface {
 type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
 
 type AuroraPGPool struct {
-	innerPool         *pgxpool.Pool
-	writeValidateFunc ValidationFunction
-	readValidateFunc  ValidationFunction
-	logger            *zap.Logger
+	innerPoolMutex         sync.Mutex
+	innerPool              *pgxpool.Pool
+	queryValidationFunc    ValidationFunction
+	logger                 *zap.Logger
+	queryHealthCheckPeriod time.Duration
+	closeChan              chan struct{}
+	closeOnce              sync.Once
 }
 
 func (p *AuroraPGPool) Close() {
-	p.innerPool.Close()
+	p.closeOnce.Do(func() {
+		close(p.closeChan)
+		p.innerPool.Close()
+	})
+}
+
+func (p *AuroraPGPool) backgroundQueryHealthCheck() {
+	ticker := time.NewTicker(p.queryHealthCheckPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.closeChan:
+			p.logger.Info("backgroundQueryHealthCheck exited..")
+			return
+		case <-ticker.C:
+			p.checkQueryHealth()
+		}
+	}
+}
+
+func (p *AuroraPGPool) checkQueryHealth() {
+	p.logger.Info("started checkQueryHealth run..")
+	ctx := context.Background()
+	conns := p.AcquireAllIdle(ctx)
+	availableCount := len(conns)
+	destroyCount := availableCount
+	if p.queryValidationFunc != nil {
+		for _, conn := range conns {
+			validated := p.queryValidationFunc(ctx, conn, p.logger)
+			if !validated {
+				err := conn.Conn().Close(ctx)
+				if err != nil {
+					p.logger.Warn("Invalid Connection close operation resulted in error", zap.Error(err))
+				}
+				destroyCount--
+			}
+			conn.Release()
+		}
+	}
+
+	if availableCount > 0 && (float64(destroyCount)/float64(availableCount)) > 0.5 && p.Stat().AcquiredConns() > 0 {
+		// this means more than 50% un-leased connections have a problem and some are leased out
+		p.logger.Warn("There may be straggling bad connections in the pool, destroying the pool")
+		pool, err := pgxpool.ConnectConfig(ctx, p.innerPool.Config())
+		recreateFail := false
+		if err != nil {
+			p.logger.Error("Failed to recreate innerPool", zap.Error(err))
+			recreateFail = true
+		}
+		if !recreateFail {
+			err = pool.Ping(ctx)
+			if err != nil {
+				p.logger.Error("Failed to ping innerPool", zap.Error(err))
+				recreateFail = true
+			}
+		}
+		if !recreateFail {
+			p.innerPoolMutex.Lock()
+			defer p.innerPoolMutex.Unlock()
+			p.innerPool.Close()
+			p.innerPool = pool
+		}
+	}
+	p.logger.Info("ended checkQueryHealth run..")
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
@@ -147,34 +215,18 @@ func (p *AuroraPGPool) Ping(ctx context.Context) error {
 	return p.innerPool.Ping(ctx)
 }
 
-func (p *AuroraPGPool) ValidateWrite(ctx context.Context) error {
-	if p.writeValidateFunc == nil {
-		return errors.New("no WriteValidateFunc set")
+func (p *AuroraPGPool) ValidateQuery(ctx context.Context) error {
+	if p.queryValidationFunc == nil {
+		return errors.New("no QueryValidationFunc set")
 	}
 	conn, err := p.innerPool.Acquire(ctx)
 	defer conn.Release()
 	if err != nil {
 		return err
 	}
-	validated := p.writeValidateFunc(ctx, conn, p.logger)
+	validated := p.queryValidationFunc(ctx, conn, p.logger)
 	if !validated {
-		return errors.New("write validation failed")
-	}
-	return nil
-}
-
-func (p *AuroraPGPool) ValidateRead(ctx context.Context) error {
-	if p.readValidateFunc == nil {
-		return errors.New("no ReadValidateFunc set")
-	}
-	conn, err := p.innerPool.Acquire(ctx)
-	defer conn.Release()
-	if err != nil {
-		return err
-	}
-	validated := p.readValidateFunc(ctx, conn, p.logger)
-	if !validated {
-		return errors.New("read validation failed")
+		return errors.New("query validation failed")
 	}
 	return nil
 }
@@ -188,12 +240,20 @@ func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*Au
 	if err != nil {
 		return nil, err
 	}
-	return &AuroraPGPool{
-		innerPool:         dbpool,
-		logger:            logger,
-		writeValidateFunc: config.WriteValidator,
-		readValidateFunc:  config.ReadValidator,
-	}, nil
+	if reflect.ValueOf(config.QueryHealthCheckPeriod).IsZero() {
+		config.QueryHealthCheckPeriod = defaultQueryHealthCheckPeriod
+	}
 
+	p := &AuroraPGPool{
+		innerPool:              dbpool,
+		logger:                 logger,
+		queryValidationFunc:    config.QueryValidator,
+		queryHealthCheckPeriod: config.QueryHealthCheckPeriod,
+		closeChan:              make(chan struct{}),
+	}
 	// Start the validator
+	if config.QueryValidator != nil {
+		go p.backgroundQueryHealthCheck()
+	}
+	return p, nil
 }

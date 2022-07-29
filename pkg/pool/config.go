@@ -70,8 +70,10 @@ func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 
 var DefaultWriteValidator ValidationFunction = writer
 
+var defaultQueryHealthCheckPeriod = time.Second * 60
+
 type Config struct {
-	WriteValidator ValidationFunction
-	ReadValidator  ValidationFunction
-	PGXConfig      *pgxpool.Config
+	QueryValidator         ValidationFunction
+	QueryHealthCheckPeriod time.Duration
+	PGXConfig              *pgxpool.Config
 }

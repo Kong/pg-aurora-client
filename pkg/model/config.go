@@ -7,6 +7,7 @@ import (
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
 	"os"
+	"time"
 )
 
 type PgConfig struct {
@@ -97,7 +98,7 @@ func getRODSN(pgc *PgConfig) string {
 	return dsn
 }
 
-func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (pool.PGXConnPool, error) {
+func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.ValidationFunction) (pool.PGXConnPool, error) {
 	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
 		zap.Bool("Enable TLS", pgc.enableTLS),
 		zap.String("user", pgc.user), zap.String("port", pgc.port),
@@ -110,10 +111,11 @@ func openPool(dsn string, pgc *PgConfig, logger *zap.Logger) (pool.PGXConnPool, 
 
 	config.MaxConns = defaultMaxConnections
 	config.MinConns = defaultMinConnections
+	// Intentionally not being aggressive since we have 2 background check threads
+	config.HealthCheckPeriod = time.Minute * 5
 	apConfig := &pool.Config{
 		PGXConfig:      config,
-		WriteValidator: pool.DefaultWriteValidator,
-		ReadValidator:  pool.DefaultReadValidator,
+		QueryValidator: validator,
 	}
 
 	dbpool, err := pool.NewAuroraPool(ctx, apConfig, logger)

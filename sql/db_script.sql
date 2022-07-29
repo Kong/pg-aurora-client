@@ -16,4 +16,14 @@ CREATE TABLE "canary"
 
 INSERT INTO canary values(1, CURRENT_TIMESTAMP);
 
+DROP TABLE IF EXISTS "replication_canary";
+
+CREATE TABLE "replication_canary"
+(
+    id bigint primary key,
+    ts timestamp
+);
+
+INSERT INTO replication_canary values(1, CURRENT_TIMESTAMP);
+
 COMMIT;
