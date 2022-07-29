@@ -17,6 +17,8 @@ func (ac *appContext) routes() http.Handler {
 	r.HandleFunc("/ro/poolstats", ac.getROConnectionPoolStats).Methods("GET")
 	r.HandleFunc("/canary", ac.getCanary).Methods("GET")
 	r.HandleFunc("/canary", ac.upsertCanary).Methods("POST")
+	r.HandleFunc("/replicationcanary", ac.getReplicationCanary).Methods("GET")
+	r.HandleFunc("/replicationcanary", ac.upsertReplicationCanary).Methods("POST")
 
 	// KAdmin
 	r.HandleFunc("/foo", ac.getPGFoo).Methods("GET")
@@ -135,6 +137,36 @@ func (ac *appContext) upsertCanary(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	payload := envelope{"canary": canary}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) getReplicationCanary(w http.ResponseWriter, _ *http.Request) {
+	canary, err := ac.Store.GetReplicationCanary()
+	if err != nil {
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
+		return
+	}
+	payload := envelope{"replicationCanary": canary}
+	err = ac.writeJSON(w, http.StatusOK, payload, nil)
+	if err != nil {
+		ac.logError(err)
+	}
+	ac.logJson(payload)
+}
+
+func (ac *appContext) upsertReplicationCanary(w http.ResponseWriter, _ *http.Request) {
+	canary, err := ac.Store.UpdateReplicationCanary()
+	if err != nil {
+		ac.logError(err)
+		ac.errorResponse(w, http.StatusInternalServerError, "Failed to Query PG")
+		return
+	}
+	payload := envelope{"replicationCanary": canary}
 	err = ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
 		ac.logError(err)
