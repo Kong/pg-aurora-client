@@ -6,16 +6,22 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
+	"sync"
 	"time"
 )
 
 const defaultMaxConnections = 50
 const defaultMinConnections = 20
 
+var defaultLagCheckFrequency = time.Second * 60
+var defaultMaxAcceptableLag = time.Millisecond * 5
+
 type Store struct {
-	rwDBPool pool.PGXConnPool
-	roDBPool pool.PGXConnPool
-	Logger   *zap.Logger
+	rwDBPool  pool.PGXConnPool
+	roDBPool  pool.PGXConnPool
+	Logger    *zap.Logger
+	closeChan chan struct{}
+	closeOnce sync.Once
 }
 
 func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
@@ -34,21 +40,64 @@ func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
 	logger.Info("Established RO DB Connection")
 
 	store := &Store{
-		rwDBPool: rwPool,
-		roDBPool: roPool,
-		Logger:   logger,
+		rwDBPool:  rwPool,
+		roDBPool:  roPool,
+		Logger:    logger,
+		closeChan: make(chan struct{}),
 	}
+	if store.rwDBPool != nil && store.roDBPool != nil {
+		go store.backgroundLagCheck()
+	}
+
 	return store, nil
 }
 
 func (s *Store) Close() {
-	if s.rwDBPool != nil {
-		s.rwDBPool.Close()
-	}
+	s.closeOnce.Do(func() {
+		close(s.closeChan)
+		if s.rwDBPool != nil {
+			s.rwDBPool.Close()
+		}
+		if s.roDBPool != nil {
+			s.roDBPool.Close()
+		}
+	})
+}
 
-	if s.roDBPool != nil {
-		s.roDBPool.Close()
+func (s *Store) backgroundLagCheck() {
+	ticker := time.NewTicker(defaultLagCheckFrequency)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.closeChan:
+			s.Logger.Info("backgroundQueryHealthCheck exited..")
+			return
+		case <-ticker.C:
+			s.checkReadLag()
+		}
 	}
+}
+
+func (s *Store) checkReadLag() {
+	canary, err := s.UpdateReplicationCanary()
+	if err != nil {
+		s.Logger.Error("Lag check update action error. Returning early", zap.Error(err))
+		return
+	}
+	time.Sleep(defaultMaxAcceptableLag)
+	canaryRead, err := s.GetReplicationCanary()
+	if err != nil {
+		s.Logger.Error("Lag check read action error. Returning early", zap.Error(err))
+		return
+	}
+	if canary.ID != canaryRead.ID {
+		s.Logger.Error("Canary write and read are not the same. Lag exceeds acceptable value",
+			zap.Int64("write ID", canary.ID),
+			zap.Int64("read ID", canaryRead.ID))
+		return
+	}
+	// Make this into a metric
+	s.Logger.Info("Read Lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
 }
 
 type ReplicaStatus struct {
