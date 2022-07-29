@@ -7,15 +7,21 @@ import (
 
 func (ac *appContext) routes() http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/pghealth", ac.getReplicationStatus).Methods("GET")
-	r.HandleFunc("/replstatusro", ac.getROReplicationStatus).Methods("GET")
-	r.HandleFunc("/foo", ac.getPGFoo).Methods("GET")
-	r.HandleFunc("/foo", ac.postPGFoo).Methods("POST")
 	r.HandleFunc("/health", ac.getHealth).Methods("GET")
+	// Aurora specific
+	r.HandleFunc("/replstatus", ac.getReplicationStatus).Methods("GET")
+	r.HandleFunc("/ro/replstatus", ac.getROReplicationStatus).Methods("GET")
+
+	// Generic health
 	r.HandleFunc("/poolstats", ac.getConnectionPoolStats).Methods("GET")
-	r.HandleFunc("/ropoolstats", ac.getROConnectionPoolStats).Methods("GET")
+	r.HandleFunc("/ro/poolstats", ac.getROConnectionPoolStats).Methods("GET")
 	r.HandleFunc("/canary", ac.getCanary).Methods("GET")
 	r.HandleFunc("/canary", ac.upsertCanary).Methods("POST")
+
+	// KAdmin
+	r.HandleFunc("/foo", ac.getPGFoo).Methods("GET")
+	r.HandleFunc("/foo", ac.postPGFoo).Methods("POST")
+
 	return r
 }
 
@@ -87,7 +93,7 @@ func (ac *appContext) postPGFoo(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (ac *appContext) getConnectionPoolStats(w http.ResponseWriter, _ *http.Request) {
-	stats := ac.Store.GetConnectionPoolStats()
+	stats := ac.Store.GetConnectionPoolStats(false)
 	payload := envelope{"connectionPoolStats": stats}
 	err := ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {
@@ -97,7 +103,7 @@ func (ac *appContext) getConnectionPoolStats(w http.ResponseWriter, _ *http.Requ
 }
 
 func (ac *appContext) getROConnectionPoolStats(w http.ResponseWriter, _ *http.Request) {
-	stats := ac.Store.GetROConnectionPoolStats()
+	stats := ac.Store.GetConnectionPoolStats(true)
 	payload := envelope{"roconnectionPoolStats": stats}
 	err := ac.writeJSON(w, http.StatusOK, payload, nil)
 	if err != nil {

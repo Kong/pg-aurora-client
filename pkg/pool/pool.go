@@ -15,8 +15,7 @@ import (
 )
 
 type ConnectionValidator interface {
-	ValidateWrite(ctx context.Context) error
-	ValidateRead(ctx context.Context) error
+	ValidateQuery(ctx context.Context) error
 }
 
 // ConnPool db conns pool interface
@@ -123,9 +122,9 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		}
 	}
 
-	if availableCount > 0 && (float64(destroyCount)/float64(availableCount)) > 0.5 && p.Stat().AcquiredConns() > 0 {
+	if availableCount > 0 && (float32(destroyCount)/float32(availableCount)) > 0.5 && p.Stat().AcquiredConns() > 0 {
 		// this means more than 50% un-leased connections have a problem and some are leased out
-		p.logger.Warn("There may be straggling bad connections in the pool, destroying the pool")
+		p.logger.Warn("There may be straggling bad connections in the pool, trying to destroy the pool")
 		pool, err := pgxpool.ConnectConfig(ctx, p.innerPool.Config())
 		recreateFail := false
 		if err != nil {
@@ -144,6 +143,7 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			defer p.innerPoolMutex.Unlock()
 			p.innerPool.Close()
 			p.innerPool = pool
+			p.logger.Info("Pool recreated")
 		}
 	}
 	p.logger.Info("ended checkQueryHealth run..")

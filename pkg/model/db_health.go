@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
 	"time"
@@ -23,19 +24,9 @@ type Canary struct {
 	DiffMS      float64   `json:"diffMS"`
 }
 
-type Foo struct {
-	ID          string    `json:"id"`
-	Created     time.Time `json:"created"`
-	LastUpdated time.Time `json:"lastUpdated"`
-}
-
 var replicaStatusQuery = `SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP FROM aurora_replica_status()
      WHERE EXTRACT(EPOCH FROM(NOW() - LAST_UPDATE_TIMESTAMP)) <= 300 OR SESSION_ID = 'MASTER_SESSION_ID'
      ORDER BY LAST_UPDATE_TIMESTAMP DESC`
-
-var getLastFooQuery = `SELECT ID, CREATED_AT, UPDATED_AT FROM FOO ORDER BY CREATED_AT DESC LIMIT 1`
-
-var insertFoo = `INSERT INTO foo (id) VALUES (default)`
 
 var getCanaryQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
@@ -48,7 +39,6 @@ type Store struct {
 }
 
 func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
-
 	dsn := getDSN(pgc)
 	rodsn := getRODSN(pgc)
 
@@ -111,58 +101,13 @@ func (s *Store) GetReplicaStatus(ro bool) ([]ReplicaStatus, error) {
 	return rsList, nil
 }
 
-func (s *Store) GetMostRecentFoo() (*Foo, error) {
-	var foo Foo
-	var rows pgx.Rows
-	var err error
-	ctx := context.Background()
-	if s.roDBPool != nil {
-		rows, err = s.roDBPool.Query(ctx, getLastFooQuery)
+func (s *Store) GetConnectionPoolStats(ro bool) *PoolStats {
+	var stat *pgxpool.Stat
+	if !ro {
+		stat = s.rwDBPool.Stat()
 	} else {
-		rows, err = s.rwDBPool.Query(ctx, getLastFooQuery)
+		stat = s.roDBPool.Stat()
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	if rows.Next() {
-		err := rows.Scan(
-			&foo.ID,
-			&foo.Created,
-			&foo.LastUpdated)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return &foo, nil
-}
-
-func (s *Store) InsertFoo() (int64, error) {
-	ctx := context.Background()
-	exec, err := s.rwDBPool.Exec(ctx, insertFoo)
-	var affected int64
-	if err != nil {
-		return affected, err
-	}
-	affected = exec.RowsAffected()
-	return affected, nil
-}
-
-func (s *Store) GetConnectionPoolStats() *PoolStats {
-	stat := s.rwDBPool.Stat()
-	poolstats := &PoolStats{
-		AcquireCount:    stat.AcquireCount(),
-		AcquireDuration: stat.AcquireDuration(),
-		AcquiredConns:   stat.AcquiredConns(),
-		IdleConns:       stat.IdleConns(),
-		TotalConns:      stat.TotalConns(),
-		MaxConns:        stat.MaxConns(),
-	}
-	return poolstats
-}
-
-func (s *Store) GetROConnectionPoolStats() *PoolStats {
-	stat := s.roDBPool.Stat()
 	poolstats := &PoolStats{
 		AcquireCount:    stat.AcquireCount(),
 		AcquireDuration: stat.AcquireDuration(),
