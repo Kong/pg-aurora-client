@@ -72,7 +72,7 @@ type PGXConnPool interface {
 type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
 
 type AuroraPGPool struct {
-	innerPoolMutex         sync.Mutex
+	innerPoolMutex         sync.RWMutex
 	innerPool              *pgxpool.Pool
 	queryValidationFunc    ValidationFunction
 	logger                 *zap.Logger
@@ -141,77 +141,109 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		if !recreateFail {
 			p.innerPoolMutex.Lock()
 			defer p.innerPoolMutex.Unlock()
-			p.innerPool.Close()
-			p.innerPool = pool
+			p.innerPool = pool // set it to new before closing the retired pool
 			p.logger.Info("Pool recreated")
+			p.innerPool.Close() // close the old connections gracefully
 		}
 	}
 	p.logger.Info("ended checkQueryHealth run..")
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Acquire(ctx)
 }
 
 func (p *AuroraPGPool) AcquireFunc(ctx context.Context, f func(*pgxpool.Conn) error) error {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.AcquireFunc(ctx, f)
 }
 
 func (p *AuroraPGPool) AcquireAllIdle(ctx context.Context) []*pgxpool.Conn {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.AcquireAllIdle(ctx)
 }
 
 func (p *AuroraPGPool) Config() *pgxpool.Config {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Config()
 }
 
 func (p *AuroraPGPool) Stat() *pgxpool.Stat {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Stat()
 }
 
 func (p *AuroraPGPool) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Exec(ctx, sql, arguments...)
 }
 
 func (p *AuroraPGPool) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Query(ctx, sql, args...)
 }
 
 func (p *AuroraPGPool) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.QueryRow(ctx, sql, args...)
 }
 
 func (p *AuroraPGPool) QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{},
 	f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.QueryFunc(ctx, sql, args, scans, f)
 }
 
 func (p *AuroraPGPool) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.SendBatch(ctx, b)
 }
 
 func (p *AuroraPGPool) Begin(ctx context.Context) (pgx.Tx, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Begin(ctx)
 }
 
 func (p *AuroraPGPool) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.BeginTx(ctx, txOptions)
 }
 
 func (p *AuroraPGPool) BeginFunc(ctx context.Context, f func(pgx.Tx) error) error {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.BeginFunc(ctx, f)
 }
 
 func (p *AuroraPGPool) BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions, f func(pgx.Tx) error) error {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.BeginTxFunc(ctx, txOptions, f)
 }
 
 func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string,
 	rowSrc pgx.CopyFromSource) (int64, error) {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
 func (p *AuroraPGPool) Ping(ctx context.Context) error {
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	return p.innerPool.Ping(ctx)
 }
 
@@ -219,6 +251,8 @@ func (p *AuroraPGPool) ValidateQuery(ctx context.Context) error {
 	if p.queryValidationFunc == nil {
 		return errors.New("no QueryValidationFunc set")
 	}
+	p.innerPoolMutex.RLock()
+	defer p.innerPoolMutex.RUnlock()
 	conn, err := p.innerPool.Acquire(ctx)
 	defer conn.Release()
 	if err != nil {
