@@ -2,6 +2,8 @@ package model
 
 import (
 	"context"
+	"errors"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/pool"
@@ -14,7 +16,8 @@ const defaultMaxConnections = 50
 const defaultMinConnections = 20
 
 var defaultLagCheckFrequency = time.Second * 60
-var defaultMaxAcceptableLag = time.Millisecond * 5
+var defaultBackoffInterval = time.Second
+var defaultLagReadRetries uint64 = 5
 
 type Store struct {
 	rwDBPool  pool.PGXConnPool
@@ -84,20 +87,27 @@ func (s *Store) checkReadLag() {
 		s.Logger.Error("Lag check update action error. Returning early", zap.Error(err))
 		return
 	}
-	time.Sleep(defaultMaxAcceptableLag)
-	canaryRead, err := s.GetReplicationCanary()
+	cb := backoff.NewConstantBackOff(defaultBackoffInterval)
+	backoff.WithMaxRetries(cb, defaultLagReadRetries)
+	err = backoff.Retry(func() error {
+		canaryRead, err := s.GetReplicationCanary()
+		if err != nil {
+			s.Logger.Error("Lag check read action error.", zap.Error(err))
+			return err
+		}
+		if canary.ID != canaryRead.ID {
+			s.Logger.Error("Canary write and read are not the same.",
+				zap.Int64("write ID", canary.ID),
+				zap.Int64("read ID", canaryRead.ID))
+			return errors.New("write ID not found during read")
+		}
+		// Make this into a metric
+		s.Logger.Info("Read Lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
+		return nil
+	}, cb)
 	if err != nil {
-		s.Logger.Error("Lag check read action error. Returning early", zap.Error(err))
-		return
+		s.Logger.Error("failed Lag measurement", zap.Error(err))
 	}
-	if canary.ID != canaryRead.ID {
-		s.Logger.Error("Canary write and read are not the same. Lag exceeds acceptable value",
-			zap.Int64("write ID", canary.ID),
-			zap.Int64("read ID", canaryRead.ID))
-		return
-	}
-	// Make this into a metric
-	s.Logger.Info("Read Lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
 }
 
 type ReplicaStatus struct {

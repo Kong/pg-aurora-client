@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.1.1
+	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/gorilla/mux v1.8.0
 	github.com/jackc/pgconn v1.12.1
 	github.com/jackc/pgx/v4 v4.16.1
