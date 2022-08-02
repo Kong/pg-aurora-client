@@ -1,7 +1,7 @@
 GO111MODULES=on
 APP=pg-aurora-client
 COMMIT_SHA=$(shell git rev-parse --short HEAD)
-APP_VERSION=18
+APP_VERSION=19pgx
 
 default: help
 

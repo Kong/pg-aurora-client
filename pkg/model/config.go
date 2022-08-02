@@ -99,7 +99,7 @@ func getRODSN(pgc *PgConfig) string {
 }
 
 func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.ValidationFunction) (pool.PGXConnPool, error) {
-	logger.Info("DB connection:", zap.String("host", pgc.hostURL),
+	logger.Debug("DB connection:", zap.String("host", pgc.hostURL),
 		zap.Bool("Enable TLS", pgc.enableTLS),
 		zap.String("user", pgc.user), zap.String("port", pgc.port),
 		zap.String("database", pgc.database), zap.String("caBundlePath", pgc.caBundleFSPath))

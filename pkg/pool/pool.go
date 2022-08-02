@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/kong/pg-aurora-client/pkg/metrics"
 	"go.uber.org/zap"
 	"reflect"
 	"sync"
@@ -103,15 +104,29 @@ func (p *AuroraPGPool) backgroundQueryHealthCheck() {
 }
 
 func (p *AuroraPGPool) checkQueryHealth() {
-	p.logger.Info("started checkQueryHealth run..")
 	ctx := context.Background()
+	stats := p.Stat()
+	host := p.Config().ConnConfig.Host
+	metrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()),
+		metrics.Tag{Key: "pg_host", Value: host})
+	metrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()),
+		metrics.Tag{Key: "pg_host", Value: host})
+	metrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()),
+		metrics.Tag{Key: "pg_host", Value: host})
 	conns := p.AcquireAllIdle(ctx)
 	availableCount := len(conns)
+	if availableCount == 0 { //TODO: Retry logic
+		p.logger.Warn("Health check reported no available connections")
+		return
+	}
+
+	p.logger.Info("started checkQueryHealth run..")
 	destroyCount := availableCount
 	if p.queryValidationFunc != nil {
 		for _, conn := range conns {
 			validated := p.queryValidationFunc(ctx, conn, p.logger)
 			if !validated {
+				p.logger.Error("Connection validation healthcheck failed")
 				err := conn.Conn().Close(ctx)
 				if err != nil {
 					p.logger.Warn("Invalid Connection close operation resulted in error", zap.Error(err))
@@ -121,8 +136,13 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			conn.Release()
 		}
 	}
+	destroyRatio := (float32(availableCount - destroyCount)) / (float32(availableCount))
+	p.logger.Info("Connections pool state", zap.String("pg_host", host),
+		zap.Int("availableCount:", availableCount), zap.Int("destroyed", availableCount-destroyCount),
+		zap.Float32("destroyRatio", destroyRatio))
 
-	if availableCount > 0 && (float32(destroyCount)/float32(availableCount)) > 0.5 && p.Stat().AcquiredConns() > 0 {
+	if availableCount > 0 && destroyRatio > 0.5 && p.Stat().AcquiredConns() > 0 {
+		p.logger.Warn("Destroying pool since ratio of destroyed connections > 0.5")
 		// this means more than 50% un-leased connections have a problem and some are leased out
 		p.logger.Warn("There may be straggling bad connections in the pool, trying to destroy the pool")
 		pool, err := pgxpool.ConnectConfig(ctx, p.innerPool.Config())
@@ -141,9 +161,10 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		if !recreateFail {
 			p.innerPoolMutex.Lock()
 			defer p.innerPoolMutex.Unlock()
+			tempPool := p.innerPool
 			p.innerPool = pool // set it to new before closing the retired pool
 			p.logger.Info("Pool recreated")
-			p.innerPool.Close() // close the old connections gracefully
+			tempPool.Close() // close the old connections gracefully
 		}
 	}
 	p.logger.Info("ended checkQueryHealth run..")

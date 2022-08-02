@@ -23,6 +23,7 @@ func reader(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 	var err error
 	rows, err = conn.Query(ctx, readerQuery)
 	if err != nil {
+		logger.Error("reader validation failed", zap.Error(err))
 		return false
 	}
 	defer rows.Close()
@@ -36,7 +37,7 @@ func reader(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 			return false
 		}
 	}
-	logger.Info("Read Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated),
+	logger.Debug("Read Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated),
 		zap.Float64("diff_ms", canary.DiffMS))
 
 	return true
@@ -52,6 +53,7 @@ func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 	var err error
 	rows, err = conn.Query(ctx, writerQuery)
 	if err != nil {
+		logger.Error("writer validation failed", zap.Error(err))
 		return false
 	}
 	defer rows.Close()
@@ -64,7 +66,7 @@ func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 			return false
 		}
 	}
-	logger.Info("Write Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated))
+	logger.Debug("Write Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated))
 	return true
 }
 

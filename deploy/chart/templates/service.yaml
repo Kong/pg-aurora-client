@@ -1,9 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "pg-aurora-client.fullname" . }}
+  name: {{ include "pg-aurora-client.fullname" . }}-pgx
   labels:
-    {{- include "pg-aurora-client.labels" . | nindent 4 }}
+    {{- include "pg-aurora-client.base.labels" . | nindent 4 }}
+    app.kubernetes.io/component: canary
 spec:
   type: ClusterIP
   ports:

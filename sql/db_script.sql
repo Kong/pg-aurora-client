@@ -8,21 +8,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO koko;
 
 DROP TABLE IF EXISTS "canary";
 
-CREATE TABLE "canary"
-(
-    id bigint primary key,
-    ts timestamp
-);
+CREATE TABLE canary (id bigint primary key, ts timestamp);
 
 INSERT INTO canary values(1, CURRENT_TIMESTAMP);
 
 DROP TABLE IF EXISTS "replication_canary";
 
-CREATE TABLE "replication_canary"
-(
-    id bigint primary key,
-    ts timestamp
-);
+CREATE TABLE replication_canary(id bigint primary key, ts timestamp);
 
 INSERT INTO replication_canary values(1, CURRENT_TIMESTAMP);
 

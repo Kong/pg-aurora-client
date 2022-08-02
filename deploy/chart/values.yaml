@@ -1,6 +1,6 @@
 image:
   repository: "kongcloud/pg-aurora-client"
-  tag: "17"
+  tag: "19pgx"
   pullPolicy: Always
 
 autoscaling:

@@ -6,6 +6,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/kong/pg-aurora-client/pkg/metrics"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
 	"sync"
@@ -16,8 +17,8 @@ const defaultMaxConnections = 50
 const defaultMinConnections = 20
 
 var defaultLagCheckFrequency = time.Second * 60
-var defaultBackoffInterval = time.Second
-var defaultLagReadRetries uint64 = 5
+var defaultBackoffInterval = time.Millisecond * 10
+var defaultLagReadRetries uint64 = 100
 
 type Store struct {
 	rwDBPool  pool.PGXConnPool
@@ -35,12 +36,12 @@ func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Established DB Connection")
+	logger.Info("Established DB Connection to ", zap.String("host", rwPool.Config().ConnConfig.Host))
 	roPool, err := openPool(rodsn, pgc, logger, pool.DefaultReadValidator)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Established RO DB Connection")
+	logger.Info("Established RO DB Connection to ", zap.String("host", roPool.Config().ConnConfig.Host))
 
 	store := &Store{
 		rwDBPool:  rwPool,
@@ -102,6 +103,8 @@ func (s *Store) checkReadLag() {
 			return errors.New("write ID not found during read")
 		}
 		// Make this into a metric
+		metrics.Gauge("pg_aurora.custom_replication_lag", canaryRead.DiffMS,
+			metrics.Tag{"env", "dev"}, metrics.Tag{"service", "pg-aurora-client"})
 		s.Logger.Info("Read Lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
 		return nil
 	}, cb)
