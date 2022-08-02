@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: {{ include "pg-aurora-client.fullname" . }}
   labels:
+    tags.datadoghq.com/env: {{ .Values.env }}
+    tags.datadoghq.com/service: pg-aurora-client
+    tags.datadoghq.com/version: {{ .Values.image.tag }}
     {{- include "pg-aurora-client.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
@@ -18,6 +21,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
+        tags.datadoghq.com/env: {{ .Values.env }}
+        tags.datadoghq.com/service: pg-aurora-client
+        tags.datadoghq.com/version: {{ .Values.image.tag }}
         policy: restricted
         {{- include "pg-aurora-client.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}

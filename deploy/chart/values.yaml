@@ -1,3 +1,4 @@
+env: dev
 image:
   repository: "kongcloud/pg-aurora-client"
   tag: "19pgx"

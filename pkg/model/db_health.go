@@ -17,8 +17,8 @@ const defaultMaxConnections = 50
 const defaultMinConnections = 20
 
 var defaultLagCheckFrequency = time.Second * 60
-var defaultBackoffInterval = time.Millisecond * 10
-var defaultLagReadRetries uint64 = 100
+var defaultBackoffInterval = time.Millisecond * 10 // keeping this low, otherwise it impacts least-count
+var defaultLagReadRetries uint64 = 100             // fail after a second of retries
 
 type Store struct {
 	rwDBPool  pool.PGXConnPool
@@ -36,12 +36,12 @@ func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Established DB Connection to ", zap.String("host", rwPool.Config().ConnConfig.Host))
+	logger.Info("established rw db connection to ", zap.String("host", rwPool.Config().ConnConfig.Host))
 	roPool, err := openPool(rodsn, pgc, logger, pool.DefaultReadValidator)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Established RO DB Connection to ", zap.String("host", roPool.Config().ConnConfig.Host))
+	logger.Info("established ro db connection to ", zap.String("host", roPool.Config().ConnConfig.Host))
 
 	store := &Store{
 		rwDBPool:  rwPool,
@@ -85,7 +85,7 @@ func (s *Store) backgroundLagCheck() {
 func (s *Store) checkReadLag() {
 	canary, err := s.UpdateReplicationCanary()
 	if err != nil {
-		s.Logger.Error("Lag check update action error. Returning early", zap.Error(err))
+		s.Logger.Error("lag check update action error. Returning early", zap.Error(err))
 		return
 	}
 	cb := backoff.NewConstantBackOff(defaultBackoffInterval)
@@ -93,23 +93,21 @@ func (s *Store) checkReadLag() {
 	err = backoff.Retry(func() error {
 		canaryRead, err := s.GetReplicationCanary()
 		if err != nil {
-			s.Logger.Error("Lag check read action error.", zap.Error(err))
+			s.Logger.Error("lag check read action error.", zap.Error(err))
 			return err
 		}
 		if canary.ID != canaryRead.ID {
-			s.Logger.Error("Canary write and read are not the same.",
+			s.Logger.Error("canary write and read are not the same.",
 				zap.Int64("write ID", canary.ID),
 				zap.Int64("read ID", canaryRead.ID))
 			return errors.New("write ID not found during read")
 		}
-		// Make this into a metric
-		metrics.Gauge("pg_aurora.custom_replication_lag", canaryRead.DiffMS,
-			metrics.Tag{"env", "dev"}, metrics.Tag{"service", "pg-aurora-client"})
-		s.Logger.Info("Read Lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
+		metrics.Gauge("pg_aurora.custom_replication_lag", canaryRead.DiffMS)
+		s.Logger.Info("read lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
 		return nil
 	}, cb)
 	if err != nil {
-		s.Logger.Error("failed Lag measurement", zap.Error(err))
+		s.Logger.Error("failed lag measurement", zap.Error(err))
 	}
 }
 
