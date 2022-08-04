@@ -102,7 +102,7 @@ func (s *Store) checkReadLag() {
 				zap.Int64("read ID", canaryRead.ID))
 			return errors.New("write ID not found during read")
 		}
-		metrics.Gauge("pg_aurora.custom_replication_lag", canaryRead.DiffMS)
+		go metrics.Gauge("pg_aurora_custom_replication_lag", canaryRead.DiffMS)
 		s.Logger.Info("read lag measured", zap.Float64("duration_ms", canaryRead.DiffMS))
 		return nil
 	}, cb)

@@ -85,7 +85,9 @@ type AuroraPGPool struct {
 func (p *AuroraPGPool) Close() {
 	p.closeOnce.Do(func() {
 		close(p.closeChan)
+		p.innerPoolMutex.Lock()
 		p.innerPool.Close()
+		p.innerPoolMutex.Unlock()
 	})
 }
 
@@ -107,12 +109,7 @@ func (p *AuroraPGPool) checkQueryHealth() {
 	ctx := context.Background()
 	stats := p.Stat()
 	host := p.Config().ConnConfig.Host
-	metrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
-	metrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
-	metrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
+	go sendPoolConnMetrics(stats, host)
 	conns := p.AcquireAllIdle(ctx)
 	availableCount := len(conns)
 	if availableCount == 0 { //TODO: Retry logic
@@ -141,7 +138,8 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		zap.Int("availableCount:", availableCount), zap.Int("destroyed", availableCount-destroyCount),
 		zap.Float32("destroyRatio", destroyRatio))
 
-	if availableCount > 0 && destroyRatio > 0.5 && p.Stat().AcquiredConns() > 0 {
+	// Min 2 connections out of 3 or > 50% of available connections have to fail to initiate a reset
+	if availableCount > 3 && destroyRatio > 0.5 {
 		p.logger.Warn("Destroying pool since ratio of destroyed connections > 0.5")
 		// this means more than 50% un-leased connections have a problem and some are leased out
 		p.logger.Warn("There may be straggling bad connections in the pool, trying to destroy the pool")
@@ -165,9 +163,20 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			p.innerPool = pool // set it to new before closing the retired pool
 			p.logger.Info("Pool recreated")
 			tempPool.Close() // close the old connections gracefully
+			go metrics.Count("pg_aurora_custom_db_destroy_count",
+				1, metrics.Tag{Key: "pg_host", Value: host})
 		}
 	}
 	p.logger.Info("ended checkQueryHealth run..")
+}
+
+func sendPoolConnMetrics(stats *pgxpool.Stat, host string) {
+	metrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()),
+		metrics.Tag{Key: "pg_host", Value: host})
+	metrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()),
+		metrics.Tag{Key: "pg_host", Value: host})
+	metrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()),
+		metrics.Tag{Key: "pg_host", Value: host})
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
