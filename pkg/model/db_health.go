@@ -13,12 +13,12 @@ import (
 	"time"
 )
 
-const defaultMaxConnections = 50
-const defaultMinConnections = 20
+const defaultMaxConnections = 5
+const defaultMinConnections = 3
 
 var defaultLagCheckFrequency = time.Second * 60
-var defaultBackoffInterval = time.Millisecond * 10 // keeping this low, otherwise it impacts least-count
-var defaultLagReadRetries uint64 = 100             // fail after a second of retries
+var defaultBackoffInterval = time.Millisecond * 5 // keeping this low, otherwise it impacts least-count
+var defaultLagReadRetries uint64 = 500            // fail after a second of retries
 
 type Store struct {
 	rwDBPool  pool.PGXConnPool
@@ -88,6 +88,8 @@ func (s *Store) checkReadLag() {
 		s.Logger.Error("lag check update action error. Returning early", zap.Error(err))
 		return
 	}
+	s.Logger.Info("updated replication canary", zap.Int64("ID", canary.ID),
+		zap.Time("update_ts", canary.LastUpdated))
 	cb := backoff.NewConstantBackOff(defaultBackoffInterval)
 	backoff.WithMaxRetries(cb, defaultLagReadRetries)
 	err = backoff.Retry(func() error {
@@ -97,7 +99,7 @@ func (s *Store) checkReadLag() {
 			return err
 		}
 		if canary.ID != canaryRead.ID {
-			s.Logger.Error("canary write and read are not the same.",
+			s.Logger.Warn("canary write and read are not the same.",
 				zap.Int64("write ID", canary.ID),
 				zap.Int64("read ID", canaryRead.ID))
 			return errors.New("write ID not found during read")
@@ -187,27 +189,14 @@ type Canary struct {
 
 var getCanaryQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
-var updateCanaryQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
+var updateCanaryQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 
-func (s *Store) UpdateCanary() (*Canary, error) {
-	var canary Canary
-	var rows pgx.Rows
-	var err error
-	ctx := context.Background()
-	rows, err = s.rwDBPool.Query(ctx, updateCanaryQuery)
+func (s *Store) UpdateCanary() (int64, error) {
+	exec, err := s.rwDBPool.Exec(context.Background(), updateCanaryQuery)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	if rows.Next() {
-		err := rows.Scan(
-			&canary.ID,
-			&canary.LastUpdated)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return &canary, nil
+	return exec.RowsAffected(), nil
 }
 
 func (s *Store) GetCanary() (*Canary, error) {
@@ -235,14 +224,20 @@ func (s *Store) GetCanary() (*Canary, error) {
 var getReplicationCanaryQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from 
                                  replication_canary;`
 
-var updateReplicationCanaryQuery = `UPDATE replication_canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
+var updateReplicationCanaryQuery = `UPDATE replication_canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 
 func (s *Store) UpdateReplicationCanary() (*Canary, error) {
+	ctx := context.Background()
+	exec, err := s.rwDBPool.Exec(ctx, updateReplicationCanaryQuery)
+	if err != nil {
+		return nil, err
+	}
+	if exec.RowsAffected() == 0 {
+		return nil, errors.New("replication canary update affected zero rows")
+	}
 	var canary Canary
 	var rows pgx.Rows
-	var err error
-	ctx := context.Background()
-	rows, err = s.rwDBPool.Query(ctx, updateReplicationCanaryQuery)
+	rows, err = s.rwDBPool.Query(ctx, getReplicationCanaryQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +245,8 @@ func (s *Store) UpdateReplicationCanary() (*Canary, error) {
 	if rows.Next() {
 		err := rows.Scan(
 			&canary.ID,
-			&canary.LastUpdated)
+			&canary.LastUpdated,
+			&canary.DiffMS)
 		if err != nil {
 			return nil, err
 		}

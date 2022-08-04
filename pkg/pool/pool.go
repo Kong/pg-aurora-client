@@ -109,7 +109,11 @@ func (p *AuroraPGPool) checkQueryHealth() {
 	ctx := context.Background()
 	stats := p.Stat()
 	host := p.Config().ConnConfig.Host
-	go sendPoolConnMetrics(stats, host)
+	p.logger.Info("pool stats", zap.Int64("acquired", int64(stats.AcquiredConns())),
+		zap.Int64("idle", int64(stats.IdleConns())),
+		zap.Int64("max", int64(stats.MaxConns())))
+
+	sendPoolConnMetrics(stats, host)
 	conns := p.AcquireAllIdle(ctx)
 	availableCount := len(conns)
 	if availableCount == 0 { //TODO: Retry logic
@@ -118,28 +122,29 @@ func (p *AuroraPGPool) checkQueryHealth() {
 	}
 
 	p.logger.Info("started checkQueryHealth run..")
-	destroyCount := availableCount
+	destroyCount := 0
 	if p.queryValidationFunc != nil {
 		for _, conn := range conns {
 			validated := p.queryValidationFunc(ctx, conn, p.logger)
 			if !validated {
-				p.logger.Error("Connection validation healthcheck failed")
+
 				err := conn.Conn().Close(ctx)
 				if err != nil {
 					p.logger.Warn("Invalid Connection close operation resulted in error", zap.Error(err))
 				}
-				destroyCount--
+				destroyCount++
+				p.logger.Sugar().Errorf("Connection validation healthcheck failed. destroyCount=%d",
+					destroyCount)
 			}
 			conn.Release()
 		}
 	}
-	destroyRatio := (float32(availableCount - destroyCount)) / (float32(availableCount))
+	p.logger.Sugar().Infof("destroyCount=%d", destroyCount)
 	p.logger.Info("Connections pool state", zap.String("pg_host", host),
-		zap.Int("availableCount:", availableCount), zap.Int("destroyed", availableCount-destroyCount),
-		zap.Float32("destroyRatio", destroyRatio))
+		zap.Int("availableCount:", availableCount), zap.Int("destroyed", destroyCount))
 
-	// Min 2 connections out of 3 or > 50% of available connections have to fail to initiate a reset
-	if availableCount > 3 && destroyRatio > 0.5 {
+	// Min 2 connections out of 3
+	if availableCount > 3 && destroyCount > 2 {
 		p.logger.Warn("Destroying pool since ratio of destroyed connections > 0.5")
 		// this means more than 50% un-leased connections have a problem and some are leased out
 		p.logger.Warn("There may be straggling bad connections in the pool, trying to destroy the pool")

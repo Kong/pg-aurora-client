@@ -37,36 +37,23 @@ func reader(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 			return false
 		}
 	}
-	logger.Debug("Read Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated),
+	logger.Info("healthcheck read canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated),
 		zap.Float64("diff_ms", canary.DiffMS))
-
 	return true
 }
 
 var DefaultReadValidator ValidationFunction = reader
 
-var writerQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP RETURNING id,ts`
+var writerQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 
 func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	var canary Canary
-	var rows pgx.Rows
-	var err error
-	rows, err = conn.Query(ctx, writerQuery)
+	exec, err := conn.Exec(ctx, writerQuery)
 	if err != nil {
 		logger.Error("writer validation failed", zap.Error(err))
 		return false
 	}
-	defer rows.Close()
-	if rows.Next() {
-		err := rows.Scan(
-			&canary.ID,
-			&canary.LastUpdated)
-		if err != nil {
-			logger.Sugar().Errorf("%s\n%s", err.Error(), debug.Stack())
-			return false
-		}
-	}
-	logger.Debug("Write Canary", zap.Int64("id", canary.ID), zap.Time("ts", canary.LastUpdated))
+
+	logger.Info("healthcheck write canary", zap.Int64("rowsUpdated", exec.RowsAffected()))
 	return true
 }
 
