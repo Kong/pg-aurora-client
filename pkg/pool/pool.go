@@ -12,7 +12,9 @@ import (
 	"go.uber.org/zap"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 type ConnectionValidator interface {
@@ -73,22 +75,28 @@ type PGXConnPool interface {
 type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
 
 type AuroraPGPool struct {
-	innerPoolMutex         sync.RWMutex
-	innerPool              *pgxpool.Pool
+	poolPtr                unsafe.Pointer
 	queryValidationFunc    ValidationFunction
 	logger                 *zap.Logger
 	queryHealthCheckPeriod time.Duration
 	closeChan              chan struct{}
 	closeOnce              sync.Once
+	config                 *Config
 }
 
 func (p *AuroraPGPool) Close() {
 	p.closeOnce.Do(func() {
 		close(p.closeChan)
-		p.innerPoolMutex.Lock()
-		p.innerPool.Close()
-		p.innerPoolMutex.Unlock()
+		p.getInnerPool().Close()
 	})
+}
+
+func (p *AuroraPGPool) getInnerPool() *pgxpool.Pool {
+	return (*pgxpool.Pool)(atomic.LoadPointer(&p.poolPtr))
+}
+
+func (p *AuroraPGPool) storeInnerPool(pool *pgxpool.Pool) {
+	atomic.StorePointer(&p.poolPtr, unsafe.Pointer(pool))
 }
 
 func (p *AuroraPGPool) backgroundQueryHealthCheck() {
@@ -105,8 +113,13 @@ func (p *AuroraPGPool) backgroundQueryHealthCheck() {
 	}
 }
 
+func (p *AuroraPGPool) runValidator(parent context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
+	tCtx, tCancel := context.WithTimeout(parent, time.Millisecond*500)
+	defer tCancel()
+	return p.queryValidationFunc(tCtx, conn, logger)
+}
+
 func (p *AuroraPGPool) checkQueryHealth() {
-	ctx := context.Background()
 	stats := p.Stat()
 	host := p.Config().ConnConfig.Host
 	p.logger.Info("pool stats", zap.Int64("acquired", int64(stats.AcquiredConns())),
@@ -114,7 +127,10 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		zap.Int64("max", int64(stats.MaxConns())))
 
 	sendPoolConnMetrics(stats, host)
-	conns := p.AcquireAllIdle(ctx)
+	ctx := context.Background()
+	timedCtx, cancel := context.WithTimeout(ctx, time.Millisecond*500)
+	defer cancel()
+	conns := p.AcquireAllIdle(timedCtx)
 	availableCount := len(conns)
 	if availableCount == 0 { //TODO: Retry logic
 		p.logger.Warn("Health check reported no available connections")
@@ -125,9 +141,8 @@ func (p *AuroraPGPool) checkQueryHealth() {
 	destroyCount := 0
 	if p.queryValidationFunc != nil {
 		for _, conn := range conns {
-			validated := p.queryValidationFunc(ctx, conn, p.logger)
+			validated := p.runValidator(ctx, conn, p.logger)
 			if !validated {
-
 				err := conn.Conn().Close(ctx)
 				if err != nil {
 					p.logger.Warn("Invalid Connection close operation resulted in error", zap.Error(err))
@@ -143,12 +158,11 @@ func (p *AuroraPGPool) checkQueryHealth() {
 	p.logger.Info("Connections pool state", zap.String("pg_host", host),
 		zap.Int("availableCount:", availableCount), zap.Int("destroyed", destroyCount))
 
-	// Min 2 connections out of 3
-	if availableCount > 3 && destroyCount > 2 {
-		p.logger.Warn("Destroying pool since ratio of destroyed connections > 0.5")
-		// this means more than 50% un-leased connections have a problem and some are leased out
-		p.logger.Warn("There may be straggling bad connections in the pool, trying to destroy the pool")
-		pool, err := pgxpool.ConnectConfig(ctx, p.innerPool.Config())
+	if availableCount > p.config.MinAvailableConnectionFailSize &&
+		destroyCount > p.config.ValidationCountDestroyTrigger {
+		p.logger.Sugar().Warnf("Destroying pool since > %d connections failed validation",
+			p.config.ValidationCountDestroyTrigger)
+		pool, err := pgxpool.ConnectConfig(ctx, p.getInnerPool().Config())
 		recreateFail := false
 		if err != nil {
 			p.logger.Error("Failed to recreate innerPool", zap.Error(err))
@@ -162,10 +176,8 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			}
 		}
 		if !recreateFail {
-			p.innerPoolMutex.Lock()
-			defer p.innerPoolMutex.Unlock()
-			tempPool := p.innerPool
-			p.innerPool = pool // set it to new before closing the retired pool
+			tempPool := p.getInnerPool()
+			p.storeInnerPool(pool) // set it to new before closing the retired pool
 			p.logger.Info("Pool recreated")
 			tempPool.Close() // close the old connections gracefully
 			go metrics.Count("pg_aurora_custom_db_destroy_count",
@@ -185,110 +197,76 @@ func sendPoolConnMetrics(stats *pgxpool.Stat, host string) {
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Acquire(ctx)
+	return p.getInnerPool().Acquire(ctx)
 }
 
 func (p *AuroraPGPool) AcquireFunc(ctx context.Context, f func(*pgxpool.Conn) error) error {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.AcquireFunc(ctx, f)
+	return p.getInnerPool().AcquireFunc(ctx, f)
 }
 
 func (p *AuroraPGPool) AcquireAllIdle(ctx context.Context) []*pgxpool.Conn {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.AcquireAllIdle(ctx)
+	return p.getInnerPool().AcquireAllIdle(ctx)
 }
 
 func (p *AuroraPGPool) Config() *pgxpool.Config {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Config()
+	return p.getInnerPool().Config()
 }
 
 func (p *AuroraPGPool) Stat() *pgxpool.Stat {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Stat()
+	return p.getInnerPool().Stat()
 }
 
 func (p *AuroraPGPool) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Exec(ctx, sql, arguments...)
+	return p.getInnerPool().Exec(ctx, sql, arguments...)
 }
 
 func (p *AuroraPGPool) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Query(ctx, sql, args...)
+	return p.getInnerPool().Query(ctx, sql, args...)
 }
 
 func (p *AuroraPGPool) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.QueryRow(ctx, sql, args...)
+	return p.getInnerPool().QueryRow(ctx, sql, args...)
 }
 
 func (p *AuroraPGPool) QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{},
 	f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.QueryFunc(ctx, sql, args, scans, f)
+	return p.getInnerPool().QueryFunc(ctx, sql, args, scans, f)
 }
 
 func (p *AuroraPGPool) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.SendBatch(ctx, b)
+	return p.getInnerPool().SendBatch(ctx, b)
 }
 
 func (p *AuroraPGPool) Begin(ctx context.Context) (pgx.Tx, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Begin(ctx)
+	return p.getInnerPool().Begin(ctx)
 }
 
 func (p *AuroraPGPool) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.BeginTx(ctx, txOptions)
+	return p.getInnerPool().BeginTx(ctx, txOptions)
 }
 
 func (p *AuroraPGPool) BeginFunc(ctx context.Context, f func(pgx.Tx) error) error {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.BeginFunc(ctx, f)
+	return p.getInnerPool().BeginFunc(ctx, f)
 }
 
 func (p *AuroraPGPool) BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions, f func(pgx.Tx) error) error {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.BeginTxFunc(ctx, txOptions, f)
+	return p.getInnerPool().BeginTxFunc(ctx, txOptions, f)
 }
 
 func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string,
 	rowSrc pgx.CopyFromSource) (int64, error) {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.CopyFrom(ctx, tableName, columnNames, rowSrc)
+	return p.getInnerPool().CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
 func (p *AuroraPGPool) Ping(ctx context.Context) error {
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	return p.innerPool.Ping(ctx)
+	return p.getInnerPool().Ping(ctx)
 }
 
 func (p *AuroraPGPool) ValidateQuery(ctx context.Context) error {
 	if p.queryValidationFunc == nil {
 		return errors.New("no QueryValidationFunc set")
 	}
-	p.innerPoolMutex.RLock()
-	defer p.innerPoolMutex.RUnlock()
-	conn, err := p.innerPool.Acquire(ctx)
+	conn, err := p.getInnerPool().Acquire(ctx)
 	defer conn.Release()
 	if err != nil {
 		return err
@@ -312,14 +290,21 @@ func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*Au
 	if reflect.ValueOf(config.QueryHealthCheckPeriod).IsZero() {
 		config.QueryHealthCheckPeriod = defaultQueryHealthCheckPeriod
 	}
+	if reflect.ValueOf(config.MinAvailableConnectionFailSize).IsZero() {
+		config.MinAvailableConnectionFailSize = defaultMinAvailableConnectionFailSize
+	}
+	if reflect.ValueOf(config.ValidationCountDestroyTrigger).IsZero() {
+		config.ValidationCountDestroyTrigger = defaultValidationCountDestroyTrigger
+	}
 
 	p := &AuroraPGPool{
-		innerPool:              dbpool,
 		logger:                 logger,
 		queryValidationFunc:    config.QueryValidator,
 		queryHealthCheckPeriod: config.QueryHealthCheckPeriod,
 		closeChan:              make(chan struct{}),
+		config:                 config,
 	}
+	p.storeInnerPool(dbpool)
 	// Start the validator
 	if config.QueryValidator != nil {
 		go p.backgroundQueryHealthCheck()

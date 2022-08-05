@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-const defaultMaxConnections = 5
-const defaultMinConnections = 3
+const defaultMaxConnections = 50
+const defaultMinConnections = 20
 
 var defaultLagCheckFrequency = time.Second * 60
 var defaultBackoffInterval = time.Millisecond * 5 // keeping this low, otherwise it impacts least-count

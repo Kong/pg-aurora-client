@@ -60,9 +60,13 @@ func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 var DefaultWriteValidator ValidationFunction = writer
 
 var defaultQueryHealthCheckPeriod = time.Second * 60
+var defaultMinAvailableConnectionFailSize = 3
+var defaultValidationCountDestroyTrigger = 2
 
 type Config struct {
-	QueryValidator         ValidationFunction
-	QueryHealthCheckPeriod time.Duration
-	PGXConfig              *pgxpool.Config
+	QueryValidator                 ValidationFunction
+	QueryHealthCheckPeriod         time.Duration
+	PGXConfig                      *pgxpool.Config
+	MinAvailableConnectionFailSize int
+	ValidationCountDestroyTrigger  int
 }
