@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -16,10 +15,6 @@ import (
 	"time"
 	"unsafe"
 )
-
-type ConnectionValidator interface {
-	ValidateQuery(ctx context.Context) error
-}
 
 // ConnPool db conns pool interface
 type ConnPool interface {
@@ -260,22 +255,6 @@ func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, c
 
 func (p *AuroraPGPool) Ping(ctx context.Context) error {
 	return p.getInnerPool().Ping(ctx)
-}
-
-func (p *AuroraPGPool) ValidateQuery(ctx context.Context) error {
-	if p.queryValidationFunc == nil {
-		return errors.New("no QueryValidationFunc set")
-	}
-	conn, err := p.getInnerPool().Acquire(ctx)
-	defer conn.Release()
-	if err != nil {
-		return err
-	}
-	validated := p.queryValidationFunc(ctx, conn, p.logger)
-	if !validated {
-		return errors.New("query validation failed")
-	}
-	return nil
 }
 
 func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*AuroraPGPool, error) {

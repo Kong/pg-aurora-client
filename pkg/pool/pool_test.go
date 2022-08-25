@@ -50,8 +50,10 @@ func TestAuroraPGPool_ValidateWrite(t *testing.T) {
 	}
 
 	testPool, err := NewAuroraPool(ctx, apConfig, logger)
-	err = testPool.ValidateQuery(ctx)
+	exec, err := testPool.Exec(ctx, writerQuery)
 	require.NoError(t, err)
+	require.Equal(t, exec.RowsAffected(), 1)
+
 }
 
 func TestAuroraPGPool_ValidateRead(t *testing.T) {
@@ -70,8 +72,9 @@ func TestAuroraPGPool_ValidateRead(t *testing.T) {
 	}
 
 	testPool, err := NewAuroraPool(ctx, apConfig, logger)
-	err = testPool.ValidateQuery(ctx)
+	rows, err := testPool.Query(context.Background(), readerQuery)
 	require.NoError(t, err)
+	rows.Close()
 }
 
 func getDSN(pgc *pgConfig) string {
