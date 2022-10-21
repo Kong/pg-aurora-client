@@ -2,11 +2,12 @@ package pool
 
 import (
 	"context"
+	"runtime/debug"
+	"time"
+
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
-	"runtime/debug"
-	"time"
 )
 
 type Canary struct {
@@ -59,9 +60,11 @@ func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 
 var DefaultWriteValidator ValidationFunction = writer
 
-var defaultQueryHealthCheckPeriod = time.Second * 60
-var defaultMinAvailableConnectionFailSize = 3
-var defaultValidationCountDestroyTrigger = 2
+var (
+	defaultQueryHealthCheckPeriod         = time.Second * 60
+	defaultMinAvailableConnectionFailSize = 3
+	defaultValidationCountDestroyTrigger  = 2
+)
 
 type Config struct {
 	QueryValidator                 ValidationFunction
@@ -69,4 +72,5 @@ type Config struct {
 	PGXConfig                      *pgxpool.Config
 	MinAvailableConnectionFailSize int
 	ValidationCountDestroyTrigger  int
+	MetricsEmitter                 MetricsEmitterFunction
 }

@@ -4,16 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/kong/pg-aurora-client/pkg/metrics"
-	"go.uber.org/zap"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"go.uber.org/zap"
 )
 
 // ConnPool db conns pool interface
@@ -67,7 +67,16 @@ type PGXConnPool interface {
 	Ping(ctx context.Context) error
 }
 
-type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
+type (
+	ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
+	Metrics            map[string]float64
+	MetricsTag         struct {
+		Key   string
+		Value string
+	}
+	// MetricsEmitterFunction the pool will simply emit raw metrics
+	MetricsEmitterFunction func(metrics Metrics, tags []MetricsTag)
+)
 
 type AuroraPGPool struct {
 	poolPtr                unsafe.Pointer
@@ -77,6 +86,7 @@ type AuroraPGPool struct {
 	closeChan              chan struct{}
 	closeOnce              sync.Once
 	config                 *Config
+	metricsEmitter         MetricsEmitterFunction
 }
 
 func (p *AuroraPGPool) Close() {
@@ -121,13 +131,14 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		zap.Int64("idle", int64(stats.IdleConns())),
 		zap.Int64("max", int64(stats.MaxConns())))
 
-	sendPoolConnMetrics(stats, host)
+	p.sendPoolConnMetrics(stats, host)
+
 	ctx := context.Background()
 	timedCtx, cancel := context.WithTimeout(ctx, time.Millisecond*500)
 	defer cancel()
 	conns := p.AcquireAllIdle(timedCtx)
 	availableCount := len(conns)
-	if availableCount == 0 { //TODO: Retry logic
+	if availableCount == 0 { // TODO: Retry logic
 		p.logger.Warn("Health check reported no available connections")
 		return
 	}
@@ -175,20 +186,26 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			p.storeInnerPool(pool) // set it to new before closing the retired pool
 			p.logger.Info("Pool recreated")
 			tempPool.Close() // close the old connections gracefully
-			go metrics.Count("pg_aurora_custom_db_destroy_count",
-				1, metrics.Tag{Key: "pg_host", Value: host})
+			if p.metricsEmitter != nil {
+				go p.metricsEmitter(
+					Metrics{"pg_aurora_custom_db_destroy_count": 1},
+					[]MetricsTag{{"pg_host", host}})
+			}
 		}
 	}
 	p.logger.Info("ended checkQueryHealth run..")
 }
 
-func sendPoolConnMetrics(stats *pgxpool.Stat, host string) {
-	metrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
-	metrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
-	metrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
+func (p *AuroraPGPool) sendPoolConnMetrics(stats *pgxpool.Stat, host string) {
+	if p.metricsEmitter != nil {
+		metrics := Metrics{
+			"pg_aurora_custom_idle_conn":     float64(stats.IdleConns()),
+			"pg_aurora_custom_acquired_conn": float64(stats.AcquiredConns()),
+			"pg_aurora_custom_max_conn":      float64(stats.MaxConns()),
+		}
+		tags := []MetricsTag{{"pg_host", host}}
+		p.metricsEmitter(metrics, tags)
+	}
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
@@ -224,7 +241,8 @@ func (p *AuroraPGPool) QueryRow(ctx context.Context, sql string, args ...interfa
 }
 
 func (p *AuroraPGPool) QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{},
-	f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error) {
+	f func(pgx.QueryFuncRow) error,
+) (pgconn.CommandTag, error) {
 	return p.getInnerPool().QueryFunc(ctx, sql, args, scans, f)
 }
 
@@ -249,7 +267,8 @@ func (p *AuroraPGPool) BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions,
 }
 
 func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string,
-	rowSrc pgx.CopyFromSource) (int64, error) {
+	rowSrc pgx.CopyFromSource,
+) (int64, error) {
 	return p.getInnerPool().CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
@@ -280,6 +299,7 @@ func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*Au
 		logger:                 logger,
 		queryValidationFunc:    config.QueryValidator,
 		queryHealthCheckPeriod: config.QueryHealthCheckPeriod,
+		metricsEmitter:         config.MetricsEmitter,
 		closeChan:              make(chan struct{}),
 		config:                 config,
 	}

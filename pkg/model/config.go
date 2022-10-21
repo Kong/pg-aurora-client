@@ -3,11 +3,14 @@ package model
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
+
+	defaultMetrics "github.com/kong/pg-aurora-client/pkg/metrics"
+
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
-	"os"
-	"time"
 )
 
 type PgConfig struct {
@@ -48,7 +51,7 @@ func validate(pgc *PgConfig) error {
 
 func LoadPostgresConfig() (*PgConfig, error) {
 	isSecure := os.Getenv("ENABLE_TLS")
-	var tls = false
+	tls := false
 	if isSecure == "yes" || isSecure == "true" {
 		tls = true
 	}
@@ -98,6 +101,18 @@ func getRODSN(pgc *PgConfig) string {
 	return dsn
 }
 
+func metricsEmitter(metrics pool.Metrics, tags []pool.MetricsTag) {
+	// they are all counters, but the MetricsEmitter can decide do what it needs
+	metricsTags := make([]defaultMetrics.Tag, 0, len(tags))
+	for _, tag := range tags {
+		metricsTags = append(metricsTags, defaultMetrics.Tag(tag))
+	}
+
+	for metricName, metricValue := range metrics {
+		defaultMetrics.Count(metricName, int64(metricValue), metricsTags...)
+	}
+}
+
 func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.ValidationFunction) (pool.PGXConnPool, error) {
 	logger.Debug("DB connection:", zap.String("host", pgc.hostURL),
 		zap.Bool("Enable TLS", pgc.enableTLS),
@@ -116,6 +131,7 @@ func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.Vali
 	apConfig := &pool.Config{
 		PGXConfig:      config,
 		QueryValidator: validator,
+		MetricsEmitter: metricsEmitter,
 	}
 
 	dbpool, err := pool.NewAuroraPool(ctx, apConfig, logger)
