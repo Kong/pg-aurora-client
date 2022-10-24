@@ -143,7 +143,7 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		return
 	}
 
-	p.logger.Info("started checkQueryHealth run..")
+	p.logger.Debug("started checkQueryHealth run..")
 	destroyCount := 0
 	if p.queryValidationFunc != nil {
 		for _, conn := range conns {
@@ -160,7 +160,6 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			conn.Release()
 		}
 	}
-	p.logger.Sugar().Infof("destroyCount=%d", destroyCount)
 	p.logger.Info("Connections pool state", zap.String("pg_host", host),
 		zap.Int("availableCount:", availableCount), zap.Int("destroyed", destroyCount))
 
@@ -193,7 +192,7 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			}
 		}
 	}
-	p.logger.Info("ended checkQueryHealth run..")
+	p.logger.Debug("ended checkQueryHealth run..")
 }
 
 func (p *AuroraPGPool) sendPoolConnMetrics(stats *pgxpool.Stat, host string) {

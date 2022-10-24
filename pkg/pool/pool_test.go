@@ -3,12 +3,13 @@ package pool
 import (
 	"context"
 	"fmt"
+	"os"
+	"testing"
+
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"os"
-	"testing"
 )
 
 func setupPGEnv(t *testing.T) {
@@ -52,8 +53,7 @@ func TestAuroraPGPool_ValidateWrite(t *testing.T) {
 	testPool, err := NewAuroraPool(ctx, apConfig, logger)
 	exec, err := testPool.Exec(ctx, writerQuery)
 	require.NoError(t, err)
-	require.Equal(t, exec.RowsAffected(), 1)
-
+	require.Equal(t, exec.RowsAffected(), int64(1))
 }
 
 func TestAuroraPGPool_ValidateRead(t *testing.T) {
@@ -107,7 +107,7 @@ func getRODSN(pgc *pgConfig) string {
 
 func loadPostgresConfig() (*pgConfig, error) {
 	isSecure := os.Getenv("ENABLE_TLS")
-	var tls = false
+	tls := false
 	if isSecure == "yes" || isSecure == "true" {
 		tls = true
 	}
