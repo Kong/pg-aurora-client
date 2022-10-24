@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	defaultMetrics "github.com/kong/pg-aurora-client/pkg/metrics"
 
@@ -126,8 +125,6 @@ func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.Vali
 
 	config.MaxConns = defaultMaxConnections
 	config.MinConns = defaultMinConnections
-	// Intentionally not being aggressive since we have 2 background check threads
-	config.HealthCheckPeriod = time.Minute * 5
 	apConfig := &pool.Config{
 		PGXConfig:      config,
 		QueryValidator: validator,

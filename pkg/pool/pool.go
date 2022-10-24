@@ -79,14 +79,16 @@ type (
 )
 
 type AuroraPGPool struct {
-	poolPtr                unsafe.Pointer
-	queryValidationFunc    ValidationFunction
-	logger                 *zap.Logger
-	queryHealthCheckPeriod time.Duration
-	closeChan              chan struct{}
-	closeOnce              sync.Once
-	config                 *Config
-	metricsEmitter         MetricsEmitterFunction
+	poolPtr                        unsafe.Pointer
+	queryValidationFunc            ValidationFunction
+	logger                         *zap.Logger
+	queryHealthCheckPeriod         time.Duration
+	closeChan                      chan struct{}
+	closeOnce                      sync.Once
+	metricsEmitter                 MetricsEmitterFunction
+	minAvailableConnectionFailSize int
+	validationCountDestroyTrigger  int
+	queryValidationTimeout         time.Duration
 }
 
 func (p *AuroraPGPool) Close() {
@@ -119,7 +121,7 @@ func (p *AuroraPGPool) backgroundQueryHealthCheck() {
 }
 
 func (p *AuroraPGPool) runValidator(parent context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	tCtx, tCancel := context.WithTimeout(parent, time.Millisecond*500)
+	tCtx, tCancel := context.WithTimeout(parent, p.queryValidationTimeout)
 	defer tCancel()
 	return p.queryValidationFunc(tCtx, conn, logger)
 }
@@ -163,10 +165,10 @@ func (p *AuroraPGPool) checkQueryHealth() {
 	p.logger.Info("Connections pool state", zap.String("pg_host", host),
 		zap.Int("availableCount:", availableCount), zap.Int("destroyed", destroyCount))
 
-	if availableCount > p.config.MinAvailableConnectionFailSize &&
-		destroyCount > p.config.ValidationCountDestroyTrigger {
+	if availableCount > p.minAvailableConnectionFailSize &&
+		destroyCount > p.validationCountDestroyTrigger {
 		p.logger.Sugar().Warnf("Destroying pool since > %d connections failed validation",
-			p.config.ValidationCountDestroyTrigger)
+			p.validationCountDestroyTrigger)
 		pool, err := pgxpool.ConnectConfig(ctx, p.getInnerPool().Config())
 		recreateFail := false
 		if err != nil {
@@ -276,6 +278,8 @@ func (p *AuroraPGPool) Ping(ctx context.Context) error {
 }
 
 func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*AuroraPGPool, error) {
+	// Intentionally not being aggressive since we have 2 background check threads
+	config.PGXConfig.HealthCheckPeriod = time.Minute * 5
 	dbpool, err := pgxpool.ConnectConfig(ctx, config.PGXConfig)
 	if err != nil {
 		return nil, err
@@ -284,23 +288,34 @@ func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*Au
 	if err != nil {
 		return nil, err
 	}
+
+	queryValidationTimeout := config.QueryValidationTimeout
+	queryHealthCheckPeriod := config.QueryHealthCheckPeriod
+	minAvailableConnectionFailSize := config.MinAvailableConnectionFailSize
+	validationCountDestroyTrigger := config.ValidationCountDestroyTrigger
+
+	if reflect.ValueOf(config.QueryValidationTimeout).IsZero() {
+		queryValidationTimeout = defaultQueryValidationTimeout
+	}
 	if reflect.ValueOf(config.QueryHealthCheckPeriod).IsZero() {
-		config.QueryHealthCheckPeriod = defaultQueryHealthCheckPeriod
+		queryHealthCheckPeriod = defaultQueryHealthCheckPeriod
 	}
 	if reflect.ValueOf(config.MinAvailableConnectionFailSize).IsZero() {
-		config.MinAvailableConnectionFailSize = defaultMinAvailableConnectionFailSize
+		minAvailableConnectionFailSize = defaultMinAvailableConnectionFailSize
 	}
 	if reflect.ValueOf(config.ValidationCountDestroyTrigger).IsZero() {
-		config.ValidationCountDestroyTrigger = defaultValidationCountDestroyTrigger
+		validationCountDestroyTrigger = defaultValidationCountDestroyTrigger
 	}
 
 	p := &AuroraPGPool{
-		logger:                 logger,
-		queryValidationFunc:    config.QueryValidator,
-		queryHealthCheckPeriod: config.QueryHealthCheckPeriod,
-		metricsEmitter:         config.MetricsEmitter,
-		closeChan:              make(chan struct{}),
-		config:                 config,
+		logger:                         logger,
+		queryValidationFunc:            config.QueryValidator,
+		queryHealthCheckPeriod:         queryHealthCheckPeriod,
+		metricsEmitter:                 config.MetricsEmitter,
+		queryValidationTimeout:         queryValidationTimeout,
+		minAvailableConnectionFailSize: minAvailableConnectionFailSize,
+		validationCountDestroyTrigger:  validationCountDestroyTrigger,
+		closeChan:                      make(chan struct{}),
 	}
 	p.storeInnerPool(dbpool)
 	// Start the validator

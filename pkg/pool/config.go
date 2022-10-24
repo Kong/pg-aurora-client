@@ -43,12 +43,12 @@ func readerValidator(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger
 	return true
 }
 
-var DefaultReadValidator ValidationFunction = readerValidator
+var DefaultReaderValidator ValidationFunction = readerValidator
 
-var writerQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
+var writeQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 
 func writeValidator(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	exec, err := conn.Exec(ctx, writerQuery)
+	exec, err := conn.Exec(ctx, writeQuery)
 	if err != nil {
 		logger.Error("write validation failed", zap.Error(err))
 		return false
@@ -64,10 +64,12 @@ var (
 	defaultQueryHealthCheckPeriod         = time.Second * 60
 	defaultMinAvailableConnectionFailSize = 3
 	defaultValidationCountDestroyTrigger  = 2
+	defaultQueryValidationTimeout         = time.Millisecond * 500
 )
 
 type Config struct {
 	QueryValidator                 ValidationFunction
+	QueryValidationTimeout         time.Duration
 	QueryHealthCheckPeriod         time.Duration
 	PGXConfig                      *pgxpool.Config
 	MinAvailableConnectionFailSize int

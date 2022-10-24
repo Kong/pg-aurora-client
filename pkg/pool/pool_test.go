@@ -51,7 +51,7 @@ func TestAuroraPGPool_ValidateWrite(t *testing.T) {
 	}
 
 	testPool, err := NewAuroraPool(ctx, apConfig, logger)
-	exec, err := testPool.Exec(ctx, writerQuery)
+	exec, err := testPool.Exec(ctx, writeQuery)
 	require.NoError(t, err)
 	require.Equal(t, exec.RowsAffected(), int64(1))
 }
