@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 
 	defaultMetrics "github.com/kong/pg-aurora-client/pkg/metrics"
 
@@ -100,15 +101,22 @@ func getRODSN(pgc *PgConfig) string {
 	return dsn
 }
 
-func metricsEmitter(metrics pool.Metrics, tags []pool.MetricsTag) {
+func metricsEmitter(metrics interface{}, tags []pool.MetricsTag) {
 	// they are all counters, but the MetricsEmitter can decide do what it needs
 	metricsTags := make([]defaultMetrics.Tag, 0, len(tags))
 	for _, tag := range tags {
 		metricsTags = append(metricsTags, defaultMetrics.Tag(tag))
 	}
 
-	for metricName, metricValue := range metrics {
-		defaultMetrics.Count(metricName, int64(metricValue), metricsTags...)
+	switch reflect.TypeOf(metrics) {
+	case reflect.TypeOf(pgxpool.Stat{}):
+		stats := metrics.(pgxpool.Stat)
+		defaultMetrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()), metricsTags...)
+		defaultMetrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()), metricsTags...)
+		defaultMetrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()), metricsTags...)
+	case reflect.TypeOf(pool.Metric{}):
+		metric := metrics.(pool.Metric)
+		defaultMetrics.Count(metric.Key, int64(metric.Value), metricsTags...)
 	}
 }
 

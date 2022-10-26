@@ -69,13 +69,16 @@ type PGXConnPool interface {
 
 type (
 	ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
-	Metrics            map[string]float64
-	MetricsTag         struct {
+	Metric             struct {
+		Key   string
+		Value float64
+	}
+	MetricsTag struct {
 		Key   string
 		Value string
 	}
-	// MetricsEmitterFunction the pool will simply emit raw metrics
-	MetricsEmitterFunction func(metrics Metrics, tags []MetricsTag)
+	// MetricsEmitterFunction the pool can emit the pgxpool.Stat or raw metrics
+	MetricsEmitterFunction func(metrics interface{}, tags []MetricsTag)
 )
 
 type AuroraPGPool struct {
@@ -133,7 +136,10 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		zap.Int64("idle", int64(stats.IdleConns())),
 		zap.Int64("max", int64(stats.MaxConns())))
 
-	p.sendPoolConnMetrics(stats, host)
+	if p.metricsEmitter != nil {
+		tags := []MetricsTag{{"pg_host", host}}
+		p.metricsEmitter(stats, tags)
+	}
 
 	ctx := context.Background()
 	timedCtx, cancel := context.WithTimeout(ctx, time.Millisecond*500)
@@ -189,24 +195,12 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			tempPool.Close() // close the old connections gracefully
 			if p.metricsEmitter != nil {
 				go p.metricsEmitter(
-					Metrics{"pg_aurora_custom_db_destroy_count": 1},
+					Metric{"pg_aurora_custom_db_destroy_count", 1},
 					[]MetricsTag{{"pg_host", host}})
 			}
 		}
 	}
 	p.logger.Debug("ended checkQueryHealth run..")
-}
-
-func (p *AuroraPGPool) sendPoolConnMetrics(stats *pgxpool.Stat, host string) {
-	if p.metricsEmitter != nil {
-		metrics := Metrics{
-			"pg_aurora_custom_idle_conn":     float64(stats.IdleConns()),
-			"pg_aurora_custom_acquired_conn": float64(stats.AcquiredConns()),
-			"pg_aurora_custom_max_conn":      float64(stats.MaxConns()),
-		}
-		tags := []MetricsTag{{"pg_host", host}}
-		p.metricsEmitter(metrics, tags)
-	}
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
