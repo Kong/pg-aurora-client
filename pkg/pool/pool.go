@@ -4,16 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/kong/pg-aurora-client/pkg/metrics"
-	"go.uber.org/zap"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"go.uber.org/zap"
 )
 
 // ConnPool db conns pool interface
@@ -67,16 +67,31 @@ type PGXConnPool interface {
 	Ping(ctx context.Context) error
 }
 
-type ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
+type (
+	ValidationFunction func(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool
+	Metric             struct {
+		Key   string
+		Value float64
+	}
+	MetricsTag struct {
+		Key   string
+		Value string
+	}
+	// MetricsEmitterFunction the pool can emit the pgxpool.Stat or raw metrics
+	MetricsEmitterFunction func(metrics interface{}, tags []MetricsTag)
+)
 
 type AuroraPGPool struct {
-	poolPtr                unsafe.Pointer
-	queryValidationFunc    ValidationFunction
-	logger                 *zap.Logger
-	queryHealthCheckPeriod time.Duration
-	closeChan              chan struct{}
-	closeOnce              sync.Once
-	config                 *Config
+	poolPtr                        unsafe.Pointer
+	queryValidationFunc            ValidationFunction
+	logger                         *zap.Logger
+	queryHealthCheckPeriod         time.Duration
+	closeChan                      chan struct{}
+	closeOnce                      sync.Once
+	metricsEmitter                 MetricsEmitterFunction
+	minAvailableConnectionFailSize int
+	validationCountDestroyTrigger  int
+	queryValidationTimeout         time.Duration
 }
 
 func (p *AuroraPGPool) Close() {
@@ -109,7 +124,7 @@ func (p *AuroraPGPool) backgroundQueryHealthCheck() {
 }
 
 func (p *AuroraPGPool) runValidator(parent context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	tCtx, tCancel := context.WithTimeout(parent, time.Millisecond*500)
+	tCtx, tCancel := context.WithTimeout(parent, p.queryValidationTimeout)
 	defer tCancel()
 	return p.queryValidationFunc(tCtx, conn, logger)
 }
@@ -121,18 +136,22 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		zap.Int64("idle", int64(stats.IdleConns())),
 		zap.Int64("max", int64(stats.MaxConns())))
 
-	sendPoolConnMetrics(stats, host)
+	if p.metricsEmitter != nil {
+		tags := []MetricsTag{{"pg_host", host}}
+		p.metricsEmitter(stats, tags)
+	}
+
 	ctx := context.Background()
 	timedCtx, cancel := context.WithTimeout(ctx, time.Millisecond*500)
 	defer cancel()
 	conns := p.AcquireAllIdle(timedCtx)
 	availableCount := len(conns)
-	if availableCount == 0 { //TODO: Retry logic
+	if availableCount == 0 { // TODO: Retry logic
 		p.logger.Warn("Health check reported no available connections")
 		return
 	}
 
-	p.logger.Info("started checkQueryHealth run..")
+	p.logger.Debug("started checkQueryHealth run..")
 	destroyCount := 0
 	if p.queryValidationFunc != nil {
 		for _, conn := range conns {
@@ -149,14 +168,13 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			conn.Release()
 		}
 	}
-	p.logger.Sugar().Infof("destroyCount=%d", destroyCount)
 	p.logger.Info("Connections pool state", zap.String("pg_host", host),
 		zap.Int("availableCount:", availableCount), zap.Int("destroyed", destroyCount))
 
-	if availableCount > p.config.MinAvailableConnectionFailSize &&
-		destroyCount > p.config.ValidationCountDestroyTrigger {
+	if availableCount > p.minAvailableConnectionFailSize &&
+		destroyCount > p.validationCountDestroyTrigger {
 		p.logger.Sugar().Warnf("Destroying pool since > %d connections failed validation",
-			p.config.ValidationCountDestroyTrigger)
+			p.validationCountDestroyTrigger)
 		pool, err := pgxpool.ConnectConfig(ctx, p.getInnerPool().Config())
 		recreateFail := false
 		if err != nil {
@@ -175,20 +193,14 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			p.storeInnerPool(pool) // set it to new before closing the retired pool
 			p.logger.Info("Pool recreated")
 			tempPool.Close() // close the old connections gracefully
-			go metrics.Count("pg_aurora_custom_db_destroy_count",
-				1, metrics.Tag{Key: "pg_host", Value: host})
+			if p.metricsEmitter != nil {
+				go p.metricsEmitter(
+					Metric{"pg_aurora_custom_db_destroy_count", 1},
+					[]MetricsTag{{"pg_host", host}})
+			}
 		}
 	}
-	p.logger.Info("ended checkQueryHealth run..")
-}
-
-func sendPoolConnMetrics(stats *pgxpool.Stat, host string) {
-	metrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
-	metrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
-	metrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()),
-		metrics.Tag{Key: "pg_host", Value: host})
+	p.logger.Debug("ended checkQueryHealth run..")
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
@@ -224,7 +236,8 @@ func (p *AuroraPGPool) QueryRow(ctx context.Context, sql string, args ...interfa
 }
 
 func (p *AuroraPGPool) QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{},
-	f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error) {
+	f func(pgx.QueryFuncRow) error,
+) (pgconn.CommandTag, error) {
 	return p.getInnerPool().QueryFunc(ctx, sql, args, scans, f)
 }
 
@@ -249,7 +262,8 @@ func (p *AuroraPGPool) BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions,
 }
 
 func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string,
-	rowSrc pgx.CopyFromSource) (int64, error) {
+	rowSrc pgx.CopyFromSource,
+) (int64, error) {
 	return p.getInnerPool().CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
@@ -258,6 +272,8 @@ func (p *AuroraPGPool) Ping(ctx context.Context) error {
 }
 
 func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*AuroraPGPool, error) {
+	// Intentionally not being aggressive since we have 2 background check threads
+	config.PGXConfig.HealthCheckPeriod = time.Minute * 5
 	dbpool, err := pgxpool.ConnectConfig(ctx, config.PGXConfig)
 	if err != nil {
 		return nil, err
@@ -266,22 +282,34 @@ func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*Au
 	if err != nil {
 		return nil, err
 	}
+
+	queryValidationTimeout := config.QueryValidationTimeout
+	queryHealthCheckPeriod := config.QueryHealthCheckPeriod
+	minAvailableConnectionFailSize := config.MinAvailableConnectionFailSize
+	validationCountDestroyTrigger := config.ValidationCountDestroyTrigger
+
+	if reflect.ValueOf(config.QueryValidationTimeout).IsZero() {
+		queryValidationTimeout = defaultQueryValidationTimeout
+	}
 	if reflect.ValueOf(config.QueryHealthCheckPeriod).IsZero() {
-		config.QueryHealthCheckPeriod = defaultQueryHealthCheckPeriod
+		queryHealthCheckPeriod = defaultQueryHealthCheckPeriod
 	}
 	if reflect.ValueOf(config.MinAvailableConnectionFailSize).IsZero() {
-		config.MinAvailableConnectionFailSize = defaultMinAvailableConnectionFailSize
+		minAvailableConnectionFailSize = defaultMinAvailableConnectionFailSize
 	}
 	if reflect.ValueOf(config.ValidationCountDestroyTrigger).IsZero() {
-		config.ValidationCountDestroyTrigger = defaultValidationCountDestroyTrigger
+		validationCountDestroyTrigger = defaultValidationCountDestroyTrigger
 	}
 
 	p := &AuroraPGPool{
-		logger:                 logger,
-		queryValidationFunc:    config.QueryValidator,
-		queryHealthCheckPeriod: config.QueryHealthCheckPeriod,
-		closeChan:              make(chan struct{}),
-		config:                 config,
+		logger:                         logger,
+		queryValidationFunc:            config.QueryValidator,
+		queryHealthCheckPeriod:         queryHealthCheckPeriod,
+		metricsEmitter:                 config.MetricsEmitter,
+		queryValidationTimeout:         queryValidationTimeout,
+		minAvailableConnectionFailSize: minAvailableConnectionFailSize,
+		validationCountDestroyTrigger:  validationCountDestroyTrigger,
+		closeChan:                      make(chan struct{}),
 	}
 	p.storeInnerPool(dbpool)
 	// Start the validator

@@ -3,22 +3,27 @@ package model
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/metrics"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
-	"sync"
-	"time"
 )
 
-const defaultMaxConnections = 50
-const defaultMinConnections = 20
+const (
+	defaultMaxConnections = 50
+	defaultMinConnections = 20
+)
 
-var defaultLagCheckFrequency = time.Second * 60
-var defaultBackoffInterval = time.Millisecond * 5 // keeping this low, otherwise it impacts least-count
-var defaultLagReadRetries uint64 = 500            // fail after a second of retries
+var (
+	defaultLagCheckFrequency        = time.Second * 60
+	defaultBackoffInterval          = time.Millisecond * 5 // keeping this low, otherwise it impacts least-count
+	defaultLagReadRetries    uint64 = 500                  // fail after a second of retries
+)
 
 type Store struct {
 	rwDBPool  pool.PGXConnPool
@@ -37,7 +42,7 @@ func NewStore(logger *zap.Logger, pgc *PgConfig) (*Store, error) {
 		return nil, err
 	}
 	logger.Info("established rw db connection to ", zap.String("host", rwPool.Config().ConnConfig.Host))
-	roPool, err := openPool(rodsn, pgc, logger, pool.DefaultReadValidator)
+	roPool, err := openPool(rodsn, pgc, logger, pool.DefaultReaderValidator)
 	if err != nil {
 		return nil, err
 	}

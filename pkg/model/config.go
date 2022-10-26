@@ -3,11 +3,14 @@ package model
 import (
 	"context"
 	"fmt"
+	"os"
+	"reflect"
+
+	defaultMetrics "github.com/kong/pg-aurora-client/pkg/metrics"
+
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/kong/pg-aurora-client/pkg/pool"
 	"go.uber.org/zap"
-	"os"
-	"time"
 )
 
 type PgConfig struct {
@@ -48,7 +51,7 @@ func validate(pgc *PgConfig) error {
 
 func LoadPostgresConfig() (*PgConfig, error) {
 	isSecure := os.Getenv("ENABLE_TLS")
-	var tls = false
+	tls := false
 	if isSecure == "yes" || isSecure == "true" {
 		tls = true
 	}
@@ -98,6 +101,25 @@ func getRODSN(pgc *PgConfig) string {
 	return dsn
 }
 
+func metricsEmitter(metrics interface{}, tags []pool.MetricsTag) {
+	// they are all counters, but the MetricsEmitter can decide do what it needs
+	metricsTags := make([]defaultMetrics.Tag, 0, len(tags))
+	for _, tag := range tags {
+		metricsTags = append(metricsTags, defaultMetrics.Tag(tag))
+	}
+
+	switch reflect.TypeOf(metrics) {
+	case reflect.TypeOf(pgxpool.Stat{}):
+		stats := metrics.(pgxpool.Stat)
+		defaultMetrics.Count("pg_aurora_custom_idle_conn", int64(stats.IdleConns()), metricsTags...)
+		defaultMetrics.Count("pg_aurora_custom_acquired_conn", int64(stats.AcquiredConns()), metricsTags...)
+		defaultMetrics.Count("pg_aurora_custom_max_conn", int64(stats.MaxConns()), metricsTags...)
+	case reflect.TypeOf(pool.Metric{}):
+		metric := metrics.(pool.Metric)
+		defaultMetrics.Count(metric.Key, int64(metric.Value), metricsTags...)
+	}
+}
+
 func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.ValidationFunction) (pool.PGXConnPool, error) {
 	logger.Debug("DB connection:", zap.String("host", pgc.hostURL),
 		zap.Bool("Enable TLS", pgc.enableTLS),
@@ -111,11 +133,10 @@ func openPool(dsn string, pgc *PgConfig, logger *zap.Logger, validator pool.Vali
 
 	config.MaxConns = defaultMaxConnections
 	config.MinConns = defaultMinConnections
-	// Intentionally not being aggressive since we have 2 background check threads
-	config.HealthCheckPeriod = time.Minute * 5
 	apConfig := &pool.Config{
 		PGXConfig:      config,
 		QueryValidator: validator,
+		MetricsEmitter: metricsEmitter,
 	}
 
 	dbpool, err := pool.NewAuroraPool(ctx, apConfig, logger)

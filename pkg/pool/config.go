@@ -2,11 +2,12 @@ package pool
 
 import (
 	"context"
+	"runtime/debug"
+	"time"
+
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"go.uber.org/zap"
-	"runtime/debug"
-	"time"
 )
 
 type Canary struct {
@@ -17,13 +18,13 @@ type Canary struct {
 
 var readerQuery = `SELECT id, ts, Extract(epoch FROM (current_timestamp - ts))*1000 AS diff_ms from canary;`
 
-func reader(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
+func readerValidator(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 	var canary Canary
 	var rows pgx.Rows
 	var err error
 	rows, err = conn.Query(ctx, readerQuery)
 	if err != nil {
-		logger.Error("reader validation failed", zap.Error(err))
+		logger.Error("read validation failed", zap.Error(err))
 		return false
 	}
 	defer rows.Close()
@@ -42,14 +43,14 @@ func reader(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 	return true
 }
 
-var DefaultReadValidator ValidationFunction = reader
+var DefaultReaderValidator ValidationFunction = readerValidator
 
-var writerQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
+var writeQuery = `UPDATE canary SET id=id +1, ts = CURRENT_TIMESTAMP`
 
-func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
-	exec, err := conn.Exec(ctx, writerQuery)
+func writeValidator(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
+	exec, err := conn.Exec(ctx, writeQuery)
 	if err != nil {
-		logger.Error("writer validation failed", zap.Error(err))
+		logger.Error("write validation failed", zap.Error(err))
 		return false
 	}
 
@@ -57,16 +58,21 @@ func writer(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger) bool {
 	return true
 }
 
-var DefaultWriteValidator ValidationFunction = writer
+var DefaultWriteValidator ValidationFunction = writeValidator
 
-var defaultQueryHealthCheckPeriod = time.Second * 60
-var defaultMinAvailableConnectionFailSize = 3
-var defaultValidationCountDestroyTrigger = 2
+var (
+	defaultQueryHealthCheckPeriod         = time.Second * 60
+	defaultMinAvailableConnectionFailSize = 3
+	defaultValidationCountDestroyTrigger  = 2
+	defaultQueryValidationTimeout         = time.Millisecond * 500
+)
 
 type Config struct {
 	QueryValidator                 ValidationFunction
+	QueryValidationTimeout         time.Duration
 	QueryHealthCheckPeriod         time.Duration
 	PGXConfig                      *pgxpool.Config
 	MinAvailableConnectionFailSize int
 	ValidationCountDestroyTrigger  int
+	MetricsEmitter                 MetricsEmitterFunction
 }
