@@ -1,0 +1,56 @@
+env: dev
+image:
+  repository: "kongcloud/pg-aurora-client"
+  tag: "19pgx"
+  pullPolicy: Always
+
+autoscaling:
+  enabled: false
+replicaCount: 1
+
+aws:
+  enabled: false
+
+# config for postgres_ca_bundle resources generation
+external_secrets:
+  database:
+    password:
+      secret_name: pg-aurora-client-secret
+    caBundle:
+      name: aws-postgres-cabundle-secret
+      storePath: /cloud.konghq.com/aws/rds/ca/global-bundle.pem
+      mountPath: "/config/ca_certs"
+
+database:
+  tls:
+    enabled : false
+  hosts:
+    rw: "koko.cluster-cgbbshtmqayd.us-west-2.rds.amazonaws.com"
+  port: 5432
+  username: postgres
+  db_name: koko
+  secret_name: pg-aurora-client-secret
+
+
+nameOverride: ""
+fullnameOverride: ""
+securityContext: {}
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 1000m
+    memory: 512Mi
+
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: zerossl-prod
+    kubernetes.io/ingress.class: kong
+    konghq.com/strip-path: "true"
+
+service:
+  type: ClusterIP
+  port: 9080

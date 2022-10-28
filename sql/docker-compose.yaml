@@ -1,0 +1,24 @@
+version: "3.0"
+networks:
+  backend:
+    driver: bridge
+
+services:
+  pg-vpd:
+    build:
+      context: .
+      dockerfile: db.Dockerfile
+    container_name: pg-vpd
+    ports:
+      - 5435:5432
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
