@@ -21,7 +21,6 @@ type EntPgxpoolDriver struct {
 }
 
 func (e *EntPgxpoolDriver) Exec(ctx context.Context, query string, args, result any) error {
-	var _ stdsql.Result
 	argv, ok := args.([]any)
 	if !ok {
 		return fmt.Errorf("dialect/sql: invalid type %T. expect []any for args", result)
@@ -128,7 +127,6 @@ type EntPgxPoolTx struct {
 }
 
 func (e *EntPgxPoolTx) Exec(ctx context.Context, query string, args, result any) error {
-	var _ stdsql.Result
 
 	argv, ok := args.([]any)
 	if !ok {
