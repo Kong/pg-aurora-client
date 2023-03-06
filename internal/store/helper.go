@@ -36,9 +36,9 @@ func SetupTestDatabase() (testcontainers.Container, *pool.AuroraPGPool, error) {
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor:   wait.ForListeningPort("5432/tcp"),
 		Env: map[string]string{
-			"POSTGRES_DB":       "koko",
-			"POSTGRES_PASSWORD": "koko",
-			"POSTGRES_USER":     "koko",
+			"POSTGRES_DB":       "postgres",
+			"POSTGRES_PASSWORD": "password",
+			"POSTGRES_USER":     "user",
 		},
 	}
 	dbContainer, err := testcontainers.GenericContainer(
@@ -59,7 +59,7 @@ func SetupTestDatabase() (testcontainers.Container, *pool.AuroraPGPool, error) {
 		return nil, nil, err
 	}
 
-	dbURI := fmt.Sprintf("postgres://koko:koko@%v:%v/koko?sslmode=disable", host, port.Port())
+	dbURI := fmt.Sprintf("postgres://user:password@%v:%v/postgres?sslmode=disable", host, port.Port())
 	err = MigrateDb(dbURI)
 	if err != nil {
 		return nil, nil, err
