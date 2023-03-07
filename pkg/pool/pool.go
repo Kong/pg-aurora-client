@@ -2,50 +2,14 @@ package pool
 
 import (
 	"context"
-	"database/sql"
-	"database/sql/driver"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 	"reflect"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unsafe"
-
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"go.uber.org/zap"
 )
-
-// ConnPool db conns pool interface
-type ConnPool interface {
-	Begin() (*sql.Tx, error)
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
-
-	Close() error
-
-	Conn(ctx context.Context) (*sql.Conn, error)
-	Driver() driver.Driver
-
-	Exec(query string, args ...any) (sql.Result, error)
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-
-	Ping() error
-	PingContext(ctx context.Context) error
-
-	Prepare(query string) (*sql.Stmt, error)
-	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
-
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
-
-	SetConnMaxIdleTime(d time.Duration)
-	SetConnMaxLifetime(d time.Duration)
-	SetMaxIdleConns(n int)
-	SetMaxOpenConns(n int)
-	Stats() sql.DBStats
-}
 
 type PGXConnPool interface {
 	Close()
@@ -57,14 +21,12 @@ type PGXConnPool interface {
 	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{}, f func(pgx.QueryFuncRow) error) (pgconn.CommandTag, error)
 	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 	Begin(ctx context.Context) (pgx.Tx, error)
 	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
-	BeginFunc(ctx context.Context, f func(pgx.Tx) error) error
-	BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions, f func(pgx.Tx) error) error
 	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
 	Ping(ctx context.Context) error
+	Reset()
 }
 
 type (
@@ -82,7 +44,7 @@ type (
 )
 
 type AuroraPGPool struct {
-	poolPtr                        unsafe.Pointer
+	innerPool                      *pgxpool.Pool
 	queryValidationFunc            ValidationFunction
 	logger                         *zap.Logger
 	queryHealthCheckPeriod         time.Duration
@@ -97,16 +59,8 @@ type AuroraPGPool struct {
 func (p *AuroraPGPool) Close() {
 	p.closeOnce.Do(func() {
 		close(p.closeChan)
-		p.getInnerPool().Close()
+		p.innerPool.Close()
 	})
-}
-
-func (p *AuroraPGPool) getInnerPool() *pgxpool.Pool {
-	return (*pgxpool.Pool)(atomic.LoadPointer(&p.poolPtr))
-}
-
-func (p *AuroraPGPool) storeInnerPool(pool *pgxpool.Pool) {
-	atomic.StorePointer(&p.poolPtr, unsafe.Pointer(pool))
 }
 
 func (p *AuroraPGPool) backgroundQueryHealthCheck() {
@@ -173,108 +127,81 @@ func (p *AuroraPGPool) checkQueryHealth() {
 
 	if availableCount > p.minAvailableConnectionFailSize &&
 		destroyCount > p.validationCountDestroyTrigger {
-		p.logger.Sugar().Warnf("Destroying pool since > %d connections failed validation",
+		p.logger.Sugar().Warnf("Resetting pool since > %d connections failed validation",
 			p.validationCountDestroyTrigger)
-		pool, err := pgxpool.ConnectConfig(ctx, p.getInnerPool().Config())
-		recreateFail := false
-		if err != nil {
-			p.logger.Error("Failed to recreate innerPool", zap.Error(err))
-			recreateFail = true
-		}
-		if !recreateFail {
-			err = pool.Ping(ctx)
-			if err != nil {
-				p.logger.Error("Failed to ping innerPool", zap.Error(err))
-				recreateFail = true
-			}
-		}
-		if !recreateFail {
-			tempPool := p.getInnerPool()
-			p.storeInnerPool(pool) // set it to new before closing the retired pool
-			p.logger.Info("Pool recreated")
-			tempPool.Close() // close the old connections gracefully
-			if p.metricsEmitter != nil {
-				go p.metricsEmitter(
-					Metric{"pg_aurora_custom_db_destroy_count", 1},
-					[]MetricsTag{{"pg_host", host}})
-			}
+		p.innerPool.Reset()
+		p.logger.Info("Pool reset complete")
+		if p.metricsEmitter != nil {
+			go p.metricsEmitter(
+				Metric{"pg_aurora_custom_db_destroy_count", 1},
+				[]MetricsTag{{"pg_host", host}})
 		}
 	}
 	p.logger.Debug("ended checkQueryHealth run..")
 }
 
 func (p *AuroraPGPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
-	return p.getInnerPool().Acquire(ctx)
+	return p.innerPool.Acquire(ctx)
 }
 
 func (p *AuroraPGPool) AcquireFunc(ctx context.Context, f func(*pgxpool.Conn) error) error {
-	return p.getInnerPool().AcquireFunc(ctx, f)
+	return p.innerPool.AcquireFunc(ctx, f)
 }
 
 func (p *AuroraPGPool) AcquireAllIdle(ctx context.Context) []*pgxpool.Conn {
-	return p.getInnerPool().AcquireAllIdle(ctx)
+	return p.innerPool.AcquireAllIdle(ctx)
 }
 
 func (p *AuroraPGPool) Config() *pgxpool.Config {
-	return p.getInnerPool().Config()
+	return p.innerPool.Config()
 }
 
 func (p *AuroraPGPool) Stat() *pgxpool.Stat {
-	return p.getInnerPool().Stat()
+	return p.innerPool.Stat()
 }
 
-func (p *AuroraPGPool) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
-	return p.getInnerPool().Exec(ctx, sql, arguments...)
+func (p *AuroraPGPool) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	return p.innerPool.Exec(ctx, sql, arguments...)
 }
 
 func (p *AuroraPGPool) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
-	return p.getInnerPool().Query(ctx, sql, args...)
+	return p.innerPool.Query(ctx, sql, args...)
 }
 
 func (p *AuroraPGPool) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	return p.getInnerPool().QueryRow(ctx, sql, args...)
-}
-
-func (p *AuroraPGPool) QueryFunc(ctx context.Context, sql string, args []interface{}, scans []interface{},
-	f func(pgx.QueryFuncRow) error,
-) (pgconn.CommandTag, error) {
-	return p.getInnerPool().QueryFunc(ctx, sql, args, scans, f)
+	return p.innerPool.QueryRow(ctx, sql, args...)
 }
 
 func (p *AuroraPGPool) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
-	return p.getInnerPool().SendBatch(ctx, b)
+	return p.innerPool.SendBatch(ctx, b)
 }
 
 func (p *AuroraPGPool) Begin(ctx context.Context) (pgx.Tx, error) {
-	return p.getInnerPool().Begin(ctx)
+	return p.innerPool.Begin(ctx)
 }
 
 func (p *AuroraPGPool) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
-	return p.getInnerPool().BeginTx(ctx, txOptions)
-}
-
-func (p *AuroraPGPool) BeginFunc(ctx context.Context, f func(pgx.Tx) error) error {
-	return p.getInnerPool().BeginFunc(ctx, f)
-}
-
-func (p *AuroraPGPool) BeginTxFunc(ctx context.Context, txOptions pgx.TxOptions, f func(pgx.Tx) error) error {
-	return p.getInnerPool().BeginTxFunc(ctx, txOptions, f)
+	return p.innerPool.BeginTx(ctx, txOptions)
 }
 
 func (p *AuroraPGPool) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string,
 	rowSrc pgx.CopyFromSource,
 ) (int64, error) {
-	return p.getInnerPool().CopyFrom(ctx, tableName, columnNames, rowSrc)
+	return p.innerPool.CopyFrom(ctx, tableName, columnNames, rowSrc)
 }
 
 func (p *AuroraPGPool) Ping(ctx context.Context) error {
-	return p.getInnerPool().Ping(ctx)
+	return p.innerPool.Ping(ctx)
+}
+
+func (p *AuroraPGPool) Reset() {
+	p.innerPool.Reset()
 }
 
 func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*AuroraPGPool, error) {
 	// Intentionally not being aggressive since we have 2 background check threads
 	config.PGXConfig.HealthCheckPeriod = time.Minute * 5
-	dbpool, err := pgxpool.ConnectConfig(ctx, config.PGXConfig)
+	dbpool, err := pgxpool.NewWithConfig(ctx, config.PGXConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +238,7 @@ func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*Au
 		validationCountDestroyTrigger:  validationCountDestroyTrigger,
 		closeChan:                      make(chan struct{}),
 	}
-	p.storeInnerPool(dbpool)
+	p.innerPool = dbpool
 	// Start the validator
 	if config.QueryValidator != nil {
 		go p.backgroundQueryHealthCheck()
