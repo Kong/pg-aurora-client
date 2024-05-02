@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 	"time"
 
@@ -60,19 +61,101 @@ func writeValidator(ctx context.Context, conn *pgxpool.Conn, logger *zap.Logger)
 
 var DefaultWriteValidator ValidationFunction = writeValidator
 
-var (
-	defaultQueryHealthCheckPeriod         = time.Second * 60
-	defaultMinAvailableConnectionFailSize = 3
-	defaultValidationCountDestroyTrigger  = 2
-	defaultQueryValidationTimeout         = time.Millisecond * 500
+const (
+	// DefaultQueryHealthCheckPeriod is the default value for Config.QueryHealthCheckPeriod.
+	DefaultQueryHealthCheckPeriod = time.Second * 60
+
+	// DefaultMinAvailableConnectionFailSize is the default value for Config.MinAvailableConnectionFailSize.
+	DefaultMinAvailableConnectionFailSize = 3
+
+	// DefaultValidationCountDestroyTrigger is the default value for Config.ValidationCountDestroyTrigger.
+	DefaultValidationCountDestroyTrigger = 2
+
+	// DefaultQueryValidationTimeout is the default value for Config.QueryValidationTimeout.
+	DefaultQueryValidationTimeout = time.Millisecond * 500
+
+	// DefaultPGXHealthCheckPeriod is used to limit PGX's own internal health check
+	// period, as when AuroraPGPool is used, there are two background check threads.
+	DefaultPGXHealthCheckPeriod = time.Minute * 5
 )
 
+// Config is used to instantiate a new AuroraPGPool.
 type Config struct {
-	QueryValidator                 ValidationFunction
-	QueryValidationTimeout         time.Duration
-	QueryHealthCheckPeriod         time.Duration
-	PGXConfig                      *pgxpool.Config
+	// QueryValidator represents the required health check validation function.
+	QueryValidator ValidationFunction
+
+	// QueryValidationTimeout represents how long the query validation function is allowed to run.
+	// Defaulted to DefaultQueryValidationTimeout when not specified.
+	QueryValidationTimeout time.Duration
+
+	// QueryHealthCheckPeriod represents how often the provided Config.QueryValidator function will run.
+	// Defaulted to DefaultQueryHealthCheckPeriod when not specified.
+	QueryHealthCheckPeriod time.Duration
+
+	// MinAvailableConnectionFailSize is used in conjunction with Config.ValidationCountDestroyTrigger, and gates
+	// when all connections on the pool are allowed to be reset. Specifically, the number of active connections
+	// at the time of validation must be larger than this value, in order for all connections to be reset.
+	//
+	// Defaulted to DefaultMinAvailableConnectionFailSize when not specified.
+	//
+	// TODO(tjasko): This behavior seems strange and documentation is not provided on why this
+	//  was done. Leaving this for a rainy day to figure out if this needs to be kept.
 	MinAvailableConnectionFailSize int
-	ValidationCountDestroyTrigger  int
-	MetricsEmitter                 MetricsEmitterFunction
+
+	// ValidationCountDestroyTrigger represents how many consecutive validation attempts need to fail until all
+	// connections on the pool are reset. When this count is reached, the pool will be reset on the next attempt.
+	//
+	// Defaulted to DefaultValidationCountDestroyTrigger when not specified.
+	ValidationCountDestroyTrigger int
+
+	// MetricsEmitter is an optional function used to collect metrics.
+	MetricsEmitter MetricsEmitterFunction
+
+	// PGXConfig is used to instantiate a new PGX pool instance on
+	// behalf of the caller. Must not be used with Config.PGXPool.
+	PGXConfig *pgxpool.Config
+
+	// PGXPool is used to pass in a pre-instantiated PGX pool.
+	// Must not be used with Config.PGXConfig.
+	//
+	// The caller is expected to set PGX's health check period to
+	// an appropriate value, e.g.: DefaultPGXHealthCheckPeriod.
+	PGXPool *pgxpool.Pool
+}
+
+func (c *Config) validate() error {
+	c.setDefaults()
+
+	if (c.PGXPool != nil && c.PGXConfig != nil) || (c.PGXPool == nil && c.PGXConfig == nil) {
+		return errors.New("must specify a PGX pool instance or config to instantiate one, not both")
+	}
+
+	if c.QueryValidator == nil {
+		// TODO(tjasko): The default query validation function really should just be executing a
+		//  `SHOW transaction_read_only` SQL query, as writing to a table is unnecessary & wasteful.
+		//
+		// This would be similar to what AWS's Java Aurora DB driver does:
+		// https://github.com/awslabs/aws-advanced-jdbc-wrapper
+		return errors.New("must specify a query validator function")
+	}
+
+	return nil
+}
+
+func (c *Config) setDefaults() {
+	if c.MinAvailableConnectionFailSize == 0 {
+		c.MinAvailableConnectionFailSize = DefaultMinAvailableConnectionFailSize
+	}
+	if c.QueryHealthCheckPeriod == 0 {
+		c.QueryHealthCheckPeriod = DefaultQueryHealthCheckPeriod
+	}
+	if c.QueryValidationTimeout == 0 {
+		c.QueryValidationTimeout = DefaultQueryValidationTimeout
+	}
+	if c.ValidationCountDestroyTrigger == 0 {
+		c.ValidationCountDestroyTrigger = DefaultValidationCountDestroyTrigger
+	}
+	if c.PGXConfig != nil {
+		c.PGXConfig.HealthCheckPeriod = DefaultPGXHealthCheckPeriod
+	}
 }
