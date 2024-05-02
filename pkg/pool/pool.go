@@ -2,13 +2,13 @@ package pool
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
-	"reflect"
-	"sync"
-	"time"
 )
 
 type PGXConnPool interface {
@@ -198,50 +198,40 @@ func (p *AuroraPGPool) Reset() {
 	p.innerPool.Reset()
 }
 
+// NewAuroraPool instantiates a new *AuroraPGPool from the given config.
+//
+// The passed in context is only used to instantiate a new PGX pool when Config.PGXConfig is provided.
+//
+// If logger is left nil, no logs will be emitted.
 func NewAuroraPool(ctx context.Context, config *Config, logger *zap.Logger) (*AuroraPGPool, error) {
-	// Intentionally not being aggressive since we have 2 background check threads
-	config.PGXConfig.HealthCheckPeriod = time.Minute * 5
-	dbpool, err := pgxpool.NewWithConfig(ctx, config.PGXConfig)
-	if err != nil {
-		return nil, err
-	}
-	err = dbpool.Ping(ctx)
-	if err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
-	queryValidationTimeout := config.QueryValidationTimeout
-	queryHealthCheckPeriod := config.QueryHealthCheckPeriod
-	minAvailableConnectionFailSize := config.MinAvailableConnectionFailSize
-	validationCountDestroyTrigger := config.ValidationCountDestroyTrigger
+	if config.PGXConfig != nil {
+		var err error
+		if config.PGXPool, err = pgxpool.NewWithConfig(ctx, config.PGXConfig); err != nil {
+			return nil, err
+		}
+	}
 
-	if reflect.ValueOf(config.QueryValidationTimeout).IsZero() {
-		queryValidationTimeout = defaultQueryValidationTimeout
-	}
-	if reflect.ValueOf(config.QueryHealthCheckPeriod).IsZero() {
-		queryHealthCheckPeriod = defaultQueryHealthCheckPeriod
-	}
-	if reflect.ValueOf(config.MinAvailableConnectionFailSize).IsZero() {
-		minAvailableConnectionFailSize = defaultMinAvailableConnectionFailSize
-	}
-	if reflect.ValueOf(config.ValidationCountDestroyTrigger).IsZero() {
-		validationCountDestroyTrigger = defaultValidationCountDestroyTrigger
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 
 	p := &AuroraPGPool{
 		logger:                         logger,
-		queryValidationFunc:            config.QueryValidator,
-		queryHealthCheckPeriod:         queryHealthCheckPeriod,
+		innerPool:                      config.PGXPool,
 		metricsEmitter:                 config.MetricsEmitter,
-		queryValidationTimeout:         queryValidationTimeout,
-		minAvailableConnectionFailSize: minAvailableConnectionFailSize,
-		validationCountDestroyTrigger:  validationCountDestroyTrigger,
+		minAvailableConnectionFailSize: config.MinAvailableConnectionFailSize,
+		queryHealthCheckPeriod:         config.QueryHealthCheckPeriod,
+		queryValidationFunc:            config.QueryValidator,
+		queryValidationTimeout:         config.QueryValidationTimeout,
+		validationCountDestroyTrigger:  config.ValidationCountDestroyTrigger,
 		closeChan:                      make(chan struct{}),
 	}
-	p.innerPool = dbpool
-	// Start the validator
-	if config.QueryValidator != nil {
-		go p.backgroundQueryHealthCheck()
-	}
+
+	go p.backgroundQueryHealthCheck()
+
 	return p, nil
 }
