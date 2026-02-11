@@ -86,7 +86,7 @@ func (p *AuroraPGPool) runValidator(parent context.Context, conn *pgxpool.Conn, 
 func (p *AuroraPGPool) checkQueryHealth() {
 	stats := p.Stat()
 	host := p.Config().ConnConfig.Host
-	p.logger.Info("pool stats", zap.Int64("acquired", int64(stats.AcquiredConns())),
+	p.logger.Debug("pool stats", zap.Int64("acquired", int64(stats.AcquiredConns())),
 		zap.Int64("idle", int64(stats.IdleConns())),
 		zap.Int64("max", int64(stats.MaxConns())))
 
@@ -122,7 +122,7 @@ func (p *AuroraPGPool) checkQueryHealth() {
 			conn.Release()
 		}
 	}
-	p.logger.Info("Connections pool state", zap.String("pg_host", host),
+	p.logger.Debug("Connections pool state", zap.String("pg_host", host),
 		zap.Int("availableCount:", availableCount), zap.Int("destroyed", destroyCount))
 
 	if availableCount > p.minAvailableConnectionFailSize &&
@@ -130,7 +130,7 @@ func (p *AuroraPGPool) checkQueryHealth() {
 		p.logger.Sugar().Warnf("Resetting pool since > %d connections failed validation",
 			p.validationCountDestroyTrigger)
 		p.innerPool.Reset()
-		p.logger.Info("Pool reset complete")
+		p.logger.Debug("Pool reset complete")
 		if p.metricsEmitter != nil {
 			go p.metricsEmitter(
 				Metric{"pg_aurora_custom_db_destroy_count", 1},
